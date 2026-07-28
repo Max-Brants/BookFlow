@@ -10,7 +10,6 @@ on:
   push:
     tags:
       - "kobo-patcher-v*"
-      - "v*"
 
 permissions:
   contents: write

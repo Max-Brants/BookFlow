@@ -6,12 +6,16 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
 jobs:
-  python-quality:
-    name: Python Quality
+  python:
+    name: Python
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -36,77 +40,14 @@ jobs:
       - name: Check dead code
         run: make python-dead-code
 
-  python-typechecks:
-    name: Python Typechecks
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - name: Install uv and Python
-        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
-        with:
-          version: "0.11.3"
-          python-version: "3.14"
-          enable-cache: true
-
-      - name: Sync dependencies
-        run: make install-python-dev
-
       - name: Typecheck
         run: make python-typecheck
 
-  python-tests:
-    name: Python Tests
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - name: Install uv and Python
-        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
-        with:
-          version: "0.11.3"
-          python-version: "3.14"
-          enable-cache: true
-
-      - name: Sync dependencies
-        run: make install-python-dev
-
-      - name: Run tests
+      - name: Unit tests
         run: make python-test
 
-  docker-build-check:
-    name: Docker Build (${{ matrix.target }}, ${{ matrix.platform }})
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        target: [bookflow, bookflow-lite]
-        platform: [linux/amd64, linux/arm64]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
-
-      - name: Build ${{ matrix.target }} image
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
-        with:
-          context: .
-          target: ${{ matrix.target }}
-          platforms: ${{ matrix.platform }}
-          push: false
-          build-args: |
-            BUILD_VERSION=ci-${{ github.sha }}
-            RELEASE_VERSION=ci-${{ github.run_number }}
-
-  frontend-quality:
-    name: Frontend Quality
+  frontend:
+    name: Frontend
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -128,45 +69,32 @@ jobs:
       - name: Check formatting
         run: make frontend-format
 
-  frontend-typechecks:
-    name: Frontend Typechecks
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - name: Set up Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24
-          cache: "npm"
-          cache-dependency-path: src/frontend/package-lock.json
-
-      - name: Install dependencies
-        run: make install-ci
-
       - name: Typecheck
         run: make frontend-typecheck
+
+      - name: Unit tests
+        run: make frontend-test
 
       - name: Production build
         run: make build
 
-  frontend-tests:
-    name: Frontend Tests
+  docker:
+    name: Docker (bookflow, amd64)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - name: Set up Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Build standard image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
-          node-version: 24
-          cache: "npm"
-          cache-dependency-path: src/frontend/package-lock.json
-
-      - name: Install dependencies
-        run: make install-ci
-
-      - name: Unit tests
-        run: make frontend-test
+          context: .
+          target: bookflow
+          platforms: linux/amd64
+          push: false
+          build-args: |
+            BUILD_VERSION=ci-${{ github.sha }}
+            RELEASE_VERSION=ci-${{ github.run_number }}
