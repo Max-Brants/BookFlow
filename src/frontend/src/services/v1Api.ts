@@ -64,6 +64,55 @@ export class V1ApiError extends Error {
   }
 }
 
+export interface IssueReportResponse {
+  issue_number: number;
+  attachment_status: 'none' | 'attached' | 'failed';
+  warning?: string;
+}
+
+const isIssueReportResponse = (value: unknown): value is IssueReportResponse => {
+  if (!isRecord(value) || typeof value.issue_number !== 'number') return false;
+  return (
+    value.attachment_status === 'none' ||
+    value.attachment_status === 'attached' ||
+    value.attachment_status === 'failed'
+  );
+};
+
+/**
+ * Submit an issue report without serializing FormData or setting a Content-Type.
+ * The browser supplies the multipart boundary, while this keeps session cookies,
+ * CSRF protection and the retry idempotency key on the request.
+ */
+export const submitIssueReport = async (
+  data: FormData,
+  idempotencyKey: string,
+): Promise<IssueReportResponse> => {
+  const response = await fetch(`${V1_BASE}/issue-reports`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: {
+      Accept: 'application/json',
+      'X-BookFlow-CSRF': '1',
+      'Idempotency-Key': idempotencyKey,
+    },
+    body: data,
+  });
+  const body: unknown = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new V1ApiError(parseError(body));
+  }
+  if (!isIssueReportResponse(body)) {
+    throw new V1ApiError({
+      code: 'unexpected_response',
+      message: 'The server returned an unexpected issue-report response',
+      details: null,
+      correlation_id: '',
+    });
+  }
+  return body;
+};
+
 const requestV1 = async <T>(path: string, init: RequestInit = {}): Promise<T> => {
   const method = (init.method ?? 'GET').toUpperCase();
   const headers = new Headers(init.headers);

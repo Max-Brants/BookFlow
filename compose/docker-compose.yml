@@ -7,6 +7,8 @@ services:
     environment:
       PUID: 1000
       PGID: 1000
+      GITHUB_ISSUE_TOKEN: ${GITHUB_ISSUE_TOKEN:-}
+      GITHUB_ISSUE_REPOSITORY: ${GITHUB_ISSUE_REPOSITORY:-Timminater/BookFlow}
     ports:
       - 8084:8084
     restart: unless-stopped

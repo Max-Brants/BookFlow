@@ -202,6 +202,18 @@ def _generate_bootstrap_env_docs() -> list[str]:
             "type": "boolean",
             "default": "true",
         },
+        {
+            "name": "GITHUB_ISSUE_TOKEN",
+            "description": "Fine-grained GitHub token used only by the server to submit in-app problem reports. Grant Issues: write and, for image attachments, Contents: write on the target repository.",
+            "type": "string (secret)",
+            "default": "unset",
+        },
+        {
+            "name": "GITHUB_ISSUE_REPOSITORY",
+            "description": "Private OWNER/REPO target for in-app problem reports. Repository Issues must be enabled.",
+            "type": "string",
+            "default": "Timminater/BookFlow",
+        },
     ]
 
     lines = [

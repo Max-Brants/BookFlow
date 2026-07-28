@@ -8,7 +8,7 @@ export const useToast = () => {
   const showToast = useCallback(
     (
       message: string,
-      type: 'info' | 'success' | 'error' = 'info',
+      type: 'info' | 'success' | 'error' | 'warning' = 'info',
       persistent: boolean = false,
     ): string => {
       const id = Date.now().toString();

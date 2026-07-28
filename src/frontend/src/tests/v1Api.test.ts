@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { V1ApiError, v1Api } from '../services/v1Api';
+import { submitIssueReport, V1ApiError, v1Api } from '../services/v1Api';
 
 const rotateKoboTokenFetchMock = async (
   input: RequestInfo | URL,
@@ -40,6 +40,58 @@ describe('v1 API client', () => {
     expect(error.code).toBe('forbidden');
     expect(error.correlationId).toBe('correlation-123');
     expect(error.message).toBe('Administrator access required');
+  });
+
+  it('submits issue reports as multipart data with CSRF and an idempotency key', async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (input, init) => {
+      let requestUrl: string;
+      if (input instanceof Request) requestUrl = input.url;
+      else if (input instanceof URL) requestUrl = input.href;
+      else requestUrl = input;
+      expect(requestUrl).toContain('/api/v1/issue-reports');
+      expect(init?.method).toBe('POST');
+      expect(init?.credentials).toBe('include');
+      expect(init?.body).toBeInstanceOf(FormData);
+      const headers = new Headers(init?.headers);
+      expect(headers.get('X-BookFlow-CSRF')).toBe('1');
+      expect(headers.get('Idempotency-Key')).toBe('issue-report-1');
+      expect(headers.has('Content-Type')).toBe(false);
+      return new Response(JSON.stringify({ issue_number: 123, attachment_status: 'attached' }), {
+        status: 201,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    };
+
+    try {
+      const data = new FormData();
+      data.set('title', 'Broken search');
+      await expect(submitIssueReport(data, 'issue-report-1')).resolves.toMatchObject({
+        issue_number: 123,
+        attachment_status: 'attached',
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('parses the v1 error envelope returned for an issue report', async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () =>
+      new Response(
+        JSON.stringify({ error: { code: 'issue_report_rate_limited', message: 'Try later' } }),
+        { status: 429, headers: { 'Content-Type': 'application/json' } },
+      );
+
+    try {
+      await expect(submitIssueReport(new FormData(), 'issue-report-2')).rejects.toMatchObject({
+        name: 'V1ApiError',
+        code: 'issue_report_rate_limited',
+        message: 'Try later',
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it('rotates a Kobo token through the personal token endpoint', async () => {

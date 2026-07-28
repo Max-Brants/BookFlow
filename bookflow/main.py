@@ -64,6 +64,8 @@ from bookflow.core.download_history_service import DownloadHistoryService
 from bookflow.core.durable_jobs import DurableJobService
 from bookflow.core.external_user_linking import upsert_external_user
 from bookflow.core.file_store import FileStore
+from bookflow.core.github_issue_routes import register_github_issue_routes
+from bookflow.core.github_issue_service import GitHubIssueService, valid_repository
 from bookflow.core.http_security import (
     TrustedProxyMiddleware,
     mutation_request_is_same_origin,
@@ -248,6 +250,7 @@ download_history_service: DownloadHistoryService | None = None
 activity_view_state_service: ActivityViewStateService | None = None
 library_service: LibraryService | None = None
 request_runtime: RequestRuntime | None = None
+github_issue_service: GitHubIssueService | None = None
 
 
 def resolve_v1_actor() -> V1Actor | None:
@@ -307,6 +310,27 @@ try:
         database_path=_user_db_path,
         resolve_actor=resolve_v1_actor,
     )
+    github_issue_token = os.environ.get("GITHUB_ISSUE_TOKEN", "").strip()
+    github_issue_repository = os.environ.get(
+        "GITHUB_ISSUE_REPOSITORY", "Timminater/BookFlow"
+    ).strip()
+    if github_issue_token and valid_repository(github_issue_repository):
+        github_issue_service = GitHubIssueService(
+            token=github_issue_token,
+            repository=github_issue_repository,
+        )
+        register_github_issue_routes(
+            app,
+            database_path=_user_db_path,
+            resolve_actor=resolve_v1_actor,
+            service=github_issue_service,
+            build_version=BUILD_VERSION,
+            release_version=RELEASE_VERSION,
+        )
+    elif github_issue_token:
+        logger.warning(
+            "GitHub issue reporting disabled: GITHUB_ISSUE_REPOSITORY must be OWNER/REPO"
+        )
     metadata_governance_service = MetadataGovernanceService(_user_db_path)
     register_metadata_routes(
         app,
@@ -1759,6 +1783,7 @@ def api_config() -> Response | tuple[Response, int]:
             ),
             "settings_enabled": _is_config_dir_writable(),
             "onboarding_complete": _get_onboarding_complete(),
+            "issue_reporting_enabled": github_issue_service is not None,
             # Default sort orders
             "metadata_default_sort": get_provider_default_sort(metadata_ui_provider),
         }

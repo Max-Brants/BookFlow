@@ -52,6 +52,8 @@ These environment variables are used at startup before the settings system loads
 | `OIDC_AUTO_REDIRECT` | Automatically redirect to the OIDC provider instead of showing the login page. | boolean | `false` |
 | `DOCKERMODE` | Indicates the application is running inside a Docker container. | boolean | `false` |
 | `ONBOARDING` | Show the onboarding wizard on first run. Set to false to skip (useful for ephemeral storage). | boolean | `true` |
+| `GITHUB_ISSUE_TOKEN` | Fine-grained GitHub token used only by the server to submit in-app problem reports. Grant Issues: write and, for image attachments, Contents: write on the target repository. | string (secret) | `unset` |
+| `GITHUB_ISSUE_REPOSITORY` | Private OWNER/REPO target for in-app problem reports. Repository Issues must be enabled. | string | `Timminater/BookFlow` |
 
 <details>
 <summary>Detailed descriptions</summary>
@@ -146,6 +148,20 @@ Show the onboarding wizard on first run. Set to false to skip (useful for epheme
 
 - **Type:** boolean
 - **Default:** `true`
+
+#### `GITHUB_ISSUE_TOKEN`
+
+Fine-grained GitHub token used only by the server to submit in-app problem reports. Grant Issues: write and, for image attachments, Contents: write on the target repository.
+
+- **Type:** string (secret)
+- **Default:** `unset`
+
+#### `GITHUB_ISSUE_REPOSITORY`
+
+Private OWNER/REPO target for in-app problem reports. Repository Issues must be enabled.
+
+- **Type:** string
+- **Default:** `Timminater/BookFlow`
 
 </details>
 

@@ -11,11 +11,13 @@ import { withBasePath } from '../utils/basePath';
 import { isRecord } from '../utils/objectHelpers';
 import { getStoredThemePreference } from '../utils/themePreference';
 import { DropdownList } from './DropdownList';
+import { IssueReportModal } from './IssueReportModal';
 interface HeaderProps {
   debug?: boolean;
   isAdmin?: boolean;
   authRequired?: boolean;
   isAuthenticated?: boolean;
+  issueReportingEnabled?: boolean;
   username?: string | null;
   displayName?: string | null;
   actingAsUser?: ActingAsUserSelection | null;
@@ -28,7 +30,7 @@ interface HeaderProps {
   onLogout?: () => void;
   onShowToast?: (
     message: string,
-    type: 'success' | 'error' | 'info',
+    type: 'success' | 'error' | 'info' | 'warning',
     persistent?: boolean,
   ) => string;
   onRemoveToast?: (id: string) => void;
@@ -50,6 +52,7 @@ export const Header = ({
   isAdmin = false,
   authRequired = false,
   isAuthenticated = false,
+  issueReportingEnabled = false,
   username,
   displayName,
   actingAsUser = null,
@@ -69,6 +72,7 @@ export const Header = ({
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [isClosing, setIsClosing] = useState(false);
   const [shouldAnimateIn, setShouldAnimateIn] = useState(false);
+  const [isIssueReportOpen, setIsIssueReportOpen] = useState(false);
   let dropdownAnimationClass = '';
   if (isClosing) {
     dropdownAnimationClass = 'animate-fade-out-up';
@@ -303,29 +307,32 @@ export const Header = ({
                   ))}
                 </div>
               </div>
-              <a
-                href="https://github.com/calibrain/bookflow/issues"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="hover-surface flex w-full items-center gap-3 px-4 py-2 text-left text-slate-700 transition-colors dark:text-slate-200"
-                title={t('header.reportBug')}
-              >
-                <svg
-                  className="h-5 w-5"
-                  xmlns="http://www.w3.org/2000/svg"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  strokeWidth="1.5"
-                  stroke="currentColor"
+              {issueReportingEnabled && isAuthenticated && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    closeDropdown();
+                    setIsIssueReportOpen(true);
+                  }}
+                  className="hover-surface flex w-full items-center gap-3 px-4 py-2 text-left text-slate-700 transition-colors dark:text-slate-200"
                 >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M3 3v1.5M3 21v-6m0 0 2.77-.693a9 9 0 0 1 6.208.682l.108.054a9 9 0 0 0 6.086.71l3.114-.732a48.524 48.524 0 0 1-.005-10.499l-3.11.732a9 9 0 0 1-6.085-.711l-.108-.054a9 9 0 0 0-6.208-.682L3 4.5M3 15V4.5"
-                  />
-                </svg>
-                <span>{t('header.reportBug')}</span>
-              </a>
+                  <svg
+                    className="h-5 w-5"
+                    xmlns="http://www.w3.org/2000/svg"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    strokeWidth="1.5"
+                    stroke="currentColor"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M3 3v1.5M3 21v-6m0 0 2.77-.693a9 9 0 0 1 6.208.682l.108.054a9 9 0 0 0 6.086.71l3.114-.732a48.524 48.524 0 0 1-.005-10.499l-3.11.732a9 9 0 0 1-6.085-.711l-.108-.054a9 9 0 0 0-6.208-.682L3 4.5M3 15V4.5"
+                    />
+                  </svg>
+                  <span>{t('header.reportBug')}</span>
+                </button>
+              )}
 
               {/* Debug Buttons */}
               {debug && (
@@ -462,34 +469,41 @@ export const Header = ({
   );
 
   return (
-    <header
-      className="bookflow-header sticky top-0 z-40 w-full border-b border-(--border-muted) bg-(--bg) backdrop-blur-xl lg:pl-64"
-      style={{ paddingTop: 'env(safe-area-inset-top)' }}
-    >
-      <div className="mx-auto max-w-[96rem] px-4 py-3 sm:px-6 lg:px-8">
-        <div className="relative flex min-h-[48px] items-center gap-3 pl-11 lg:pl-0 xl:justify-center">
-          <form
-            className="relative min-w-0 flex-1 xl:w-full xl:max-w-2xl xl:flex-none"
-            onSubmit={handleCatalogSearch}
-          >
-            <span
-              aria-hidden="true"
-              className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm opacity-45"
+    <>
+      <header
+        className="bookflow-header sticky top-0 z-40 w-full border-b border-(--border-muted) bg-(--bg) backdrop-blur-xl lg:pl-64"
+        style={{ paddingTop: 'env(safe-area-inset-top)' }}
+      >
+        <div className="mx-auto max-w-[96rem] px-4 py-3 sm:px-6 lg:px-8">
+          <div className="relative flex min-h-[48px] items-center gap-3 pl-11 lg:pl-0 xl:justify-center">
+            <form
+              className="relative min-w-0 flex-1 xl:w-full xl:max-w-2xl xl:flex-none"
+              onSubmit={handleCatalogSearch}
             >
-              ⌕
-            </span>
-            <input
-              type="search"
-              value={searchQuery}
-              onChange={(event) => setSearchQuery(event.target.value)}
-              placeholder={t('header.search')}
-              aria-label={t('header.searchLabel')}
-              className="w-full rounded-xl border border-(--border-muted) bg-(--bg-soft) py-2.5 pr-4 pl-9 text-sm shadow-sm transition outline-none focus:border-violet-500/60 focus:ring-2 focus:ring-violet-500/15"
-            />
-          </form>
-          <div className="xl:absolute xl:right-0">{iconButtonsNode}</div>
+              <span
+                aria-hidden="true"
+                className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm opacity-45"
+              >
+                ⌕
+              </span>
+              <input
+                type="search"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder={t('header.search')}
+                aria-label={t('header.searchLabel')}
+                className="w-full rounded-xl border border-(--border-muted) bg-(--bg-soft) py-2.5 pr-4 pl-9 text-sm shadow-sm transition outline-none focus:border-violet-500/60 focus:ring-2 focus:ring-violet-500/15"
+              />
+            </form>
+            <div className="xl:absolute xl:right-0">{iconButtonsNode}</div>
+          </div>
         </div>
-      </div>
-    </header>
+      </header>
+      <IssueReportModal
+        isOpen={isIssueReportOpen}
+        onClose={() => setIsIssueReportOpen(false)}
+        onShowToast={onShowToast}
+      />
+    </>
   );
 };

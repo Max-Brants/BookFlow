@@ -173,6 +173,7 @@ function App() {
           isAdmin={isAdmin}
           authRequired={authRequired}
           isAuthenticated={isAuthenticated}
+          issueReportingEnabled={config?.issue_reporting_enabled === true}
           username={username}
           displayName={displayName}
           onLogout={() => {

@@ -20,6 +20,8 @@ services:
       LAN_NETWORK: 127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
       PUID: 1000
       PGID: 1000
+      GITHUB_ISSUE_TOKEN: ${GITHUB_ISSUE_TOKEN:-}
+      GITHUB_ISSUE_REPOSITORY: ${GITHUB_ISSUE_REPOSITORY:-Timminater/BookFlow}
     cap_add:
       - NET_ADMIN
       - NET_RAW

@@ -8,6 +8,8 @@ services:
       USING_TOR: true
       PUID: 1000
       PGID: 1000
+      GITHUB_ISSUE_TOKEN: ${GITHUB_ISSUE_TOKEN:-}
+      GITHUB_ISSUE_REPOSITORY: ${GITHUB_ISSUE_REPOSITORY:-Timminater/BookFlow}
     cap_add:
       - NET_ADMIN
       - NET_RAW

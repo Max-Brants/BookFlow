@@ -338,6 +338,9 @@ def register_v1_api(
                 "/api/v1/catalog/books/{bookId}/metadata-reports": {
                     "post": {"summary": "Report incorrect catalog metadata"}
                 },
+                "/api/v1/issue-reports": {
+                    "post": {"summary": "Submit an in-app problem report to GitHub"}
+                },
                 "/api/v1/metadata-reports": {"get": {"summary": "List own metadata reports"}},
                 "/api/v1/admin/metadata-reports": {"get": {"summary": "Review metadata reports"}},
                 "/api/v1/admin/metadata-reports/{reportId}/reject": {

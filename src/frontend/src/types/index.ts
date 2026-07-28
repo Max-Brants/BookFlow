@@ -100,7 +100,7 @@ export interface AdvancedFilterState {
 export interface Toast {
   id: string;
   message: string;
-  type: 'success' | 'error' | 'info';
+  type: 'success' | 'error' | 'info' | 'warning';
 }
 
 // Sort option for dropdowns
@@ -227,6 +227,8 @@ export interface AppConfig {
   settings_enabled: boolean; // Whether config directory is mounted and writable
   onboarding_complete: boolean; // Whether the user has completed initial setup
   metadata_default_sort: string; // Default sort for universal mode (from metadata provider)
+  /** Whether authenticated users can submit an in-app GitHub issue. */
+  issue_reporting_enabled?: boolean;
 }
 
 export interface MetadataProviderSummary {
