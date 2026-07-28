@@ -1,4 +1,5 @@
 import type { V1CatalogBookDetail } from '../types/v1';
+import { normalizeBookDescription } from '../utils/bookDescription';
 
 type DetailBook = V1CatalogBookDetail['book'];
 
@@ -57,6 +58,7 @@ export interface BookDetailPresentation {
 
 export const presentBookDetail = (book: DetailBook): BookDetailPresentation => {
   const metadata = isRecord(book.metadata) ? book.metadata : {};
+  const description = firstText(book.description, metadata.description);
   const formats = Array.from(
     new Set((book.formats ?? []).map((format) => format.trim().toUpperCase()).filter(Boolean)),
   );
@@ -65,7 +67,7 @@ export const presentBookDetail = (book: DetailBook): BookDetailPresentation => {
   );
 
   return {
-    description: firstText(book.description, metadata.description),
+    description: description === null ? null : normalizeBookDescription(description),
     publisher: firstText(metadata.publisher, metadata.imprint),
     pageCount: firstPositiveInteger(
       metadata.page_count,

@@ -19,6 +19,7 @@ import type {
   LeadingCellConfig,
 } from '../types';
 import { isMetadataBook } from '../types';
+import { normalizeBookDescription } from '../utils/bookDescription';
 import { bookSupportsTargets } from '../utils/bookTargetLoader';
 import { getColorStyleFromHint } from '../utils/colorMaps';
 import {
@@ -619,10 +620,14 @@ const ReleaseModalSession = ({
   // Description expansion
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
   const descriptionRef = useRef<HTMLParagraphElement>(null);
+  const normalizedDescription = useMemo(
+    () => normalizeBookDescription(book.description || ''),
+    [book.description],
+  );
   const descriptionOverflows = useDescriptionOverflow({
     descriptionRef,
     descriptionExpanded,
-    descriptionKey: book.description,
+    descriptionKey: normalizedDescription,
   });
   const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const tabIndicatorStyle = useTabIndicator(tabRefs, activeTab, allTabs);
@@ -1224,10 +1229,10 @@ const ReleaseModalSession = ({
                   )}
 
                   {/* Description */}
-                  {book.description && (
+                  {normalizedDescription && (
                     <div className="relative text-sm text-zinc-600 dark:text-zinc-400">
                       <p ref={descriptionRef} className={descriptionExpanded ? '' : 'line-clamp-3'}>
-                        {book.description}
+                        {normalizedDescription}
                         {descriptionExpanded && descriptionOverflows && (
                           <>
                             {' '}

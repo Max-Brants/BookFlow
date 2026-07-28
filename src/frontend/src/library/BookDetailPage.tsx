@@ -13,6 +13,7 @@ import { V1ApiError, v1Api } from '../services/v1Api';
 import type { Book } from '../types';
 import type { V1BookDetail, V1ReadingProgress } from '../types/v1';
 import { withBasePath } from '../utils/basePath';
+import { normalizeBookDescription } from '../utils/bookDescription';
 import { createIdempotencyKey } from '../utils/idempotencyKey';
 import {
   formatFileSize,
@@ -567,7 +568,8 @@ export const BookDetailPage = ({
       <article className="mt-10 max-w-4xl border-t border-(--border-muted) pt-6">
         <h2 className="text-sm font-semibold text-(--text)">{t('bookDetail.about')}</h2>
         <p className="mt-3 leading-7 whitespace-pre-line text-gray-700 dark:text-gray-200">
-          {book.metadata_json?.description || t('bookDetail.noDescription')}
+          {normalizeBookDescription(book.metadata_json?.description || '') ||
+            t('bookDetail.noDescription')}
         </p>
       </article>
       <section className="mt-8 max-w-4xl rounded-xl border border-(--border-muted) p-4">
