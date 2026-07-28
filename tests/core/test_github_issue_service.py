@@ -111,7 +111,9 @@ class _FakeSession:
 
 def _service(responses: list[_Response | BaseException]) -> tuple[GitHubIssueService, _FakeSession]:
     session = _FakeSession(responses)
-    return GitHubIssueService(token="secret", repository="owner/private-repo", session=session), session
+    return GitHubIssueService(
+        token="secret", repository="owner/private-repo", session=session
+    ), session
 
 
 def test_create_issue_retries_without_label_when_label_is_missing() -> None:
@@ -150,7 +152,11 @@ def test_create_issue_does_not_retry_non_label_validation_failure() -> None:
 
 @pytest.mark.parametrize(
     ("status", "code"),
-    [(401, "github_auth_failed"), (404, "github_repository_unavailable"), (429, "github_rate_limited")],
+    [
+        (401, "github_auth_failed"),
+        (404, "github_repository_unavailable"),
+        (429, "github_rate_limited"),
+    ],
 )
 def test_create_issue_maps_github_errors_to_safe_errors(status: int, code: str) -> None:
     service, _session = _service([_Response(status)])
@@ -172,7 +178,9 @@ def test_create_issue_maps_network_errors_to_service_unavailable() -> None:
     assert raised.value.status_code == 503
 
 
-def test_attach_image_creates_branch_uploads_and_updates_issue(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_attach_image_creates_branch_uploads_and_updates_issue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     service, session = _service(
         [
             _Response(404),
@@ -183,7 +191,9 @@ def test_attach_image_creates_branch_uploads_and_updates_issue(monkeypatch: pyte
             _Response(200),
         ]
     )
-    monkeypatch.setattr("bookflow.core.github_issue_service.uuid.uuid4", lambda: type("U", (), {"hex": "abc"})())
+    monkeypatch.setattr(
+        "bookflow.core.github_issue_service.uuid.uuid4", lambda: type("U", (), {"hex": "abc"})()
+    )
     image = normalize_image(_image_bytes())
 
     attachment_url = service.attach_image(issue=CreatedIssue(7, "The body"), image=image)

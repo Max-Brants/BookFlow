@@ -67,7 +67,9 @@ def normalize_image(raw: bytes) -> NormalizedImage:
     try:
         with Image.open(io.BytesIO(raw)) as source:
             if source.format not in {"PNG", "JPEG", "WEBP"}:
-                raise ImageValidationError("Alleen PNG-, JPEG- en WebP-afbeeldingen zijn toegestaan")
+                raise ImageValidationError(
+                    "Alleen PNG-, JPEG- en WebP-afbeeldingen zijn toegestaan"
+                )
             source_media_type = {
                 "PNG": "image/png",
                 "JPEG": "image/jpeg",
@@ -261,9 +263,7 @@ class GitHubIssueService:
             raise IssueReportingError(
                 "github_invalid_response", "GitHub gaf geen standaardbranch terug", 502
             )
-        base_response = self._request(
-            "GET", f"/git/ref/heads/{quote(default_branch, safe='')}"
-        )
+        base_response = self._request("GET", f"/git/ref/heads/{quote(default_branch, safe='')}")
         self._raise_for_response(base_response)
         base_payload = self._json_object(base_response)
         sha = (

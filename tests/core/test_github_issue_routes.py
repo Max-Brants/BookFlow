@@ -74,7 +74,9 @@ def configured(tmp_path: Path):
     return app.test_client(), service, db_path, actor
 
 
-def _form(*, title: str = "Broken search", description: str = "Search stays blank") -> dict[str, object]:
+def _form(
+    *, title: str = "Broken search", description: str = "Search stays blank"
+) -> dict[str, object]:
     return {
         "title": title,
         "description": description,
@@ -115,7 +117,9 @@ def test_route_requires_an_authenticated_actor(tmp_path: Path) -> None:
         ({"title": "x", "description": "x", "page_url": "javascript:alert(1)"}, "invalid_page_url"),
     ],
 )
-def test_route_validates_required_fields_and_page_url(configured, data: dict[str, object], code: str) -> None:
+def test_route_validates_required_fields_and_page_url(
+    configured, data: dict[str, object], code: str
+) -> None:
     client, service, _path, _actor = configured
 
     response = _post(client, data=data)
