@@ -43,17 +43,7 @@ def _book_files(books: Path) -> set[str]:
 
 
 def _prowlarr_search(client, query: str):
-    return client.get(
-        "/api/releases",
-        params={
-            "provider": "manual",
-            "book_id": "e2e-manual-1",
-            "source": "prowlarr",
-            "title": query,
-            "manual_query": query,
-        },
-        timeout=60,
-    )
+    return client.search_releases(query, source="prowlarr")
 
 
 def test_prowlarr_to_real_torrent_client_download(client, active_profile) -> None:
