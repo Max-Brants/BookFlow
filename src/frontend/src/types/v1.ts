@@ -28,6 +28,7 @@ export interface V1ReadingProgress {
 
 export interface V1CatalogBook {
   id: number;
+  in_library?: boolean;
   metadata_provider?: string;
   provider_book_id?: string;
   title: string;
@@ -50,6 +51,24 @@ export interface V1CatalogBook {
 export interface V1SuggestionBook extends V1CatalogBook {
   in_library: boolean;
   request_status: string | null;
+}
+
+export type V1BulkLibraryStatus = 'added' | 'already_in_library' | 'unavailable' | 'not_found';
+
+export interface V1BulkLibraryResult {
+  book_id: number;
+  canonical_book_id?: number;
+  status: V1BulkLibraryStatus;
+}
+
+export interface V1BulkLibraryResponse {
+  results: V1BulkLibraryResult[];
+  summary: {
+    submitted: number;
+    added: number;
+    already_in_library: number;
+    failed: number;
+  };
 }
 
 export interface V1UserRequest {

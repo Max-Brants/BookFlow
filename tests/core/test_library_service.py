@@ -118,6 +118,129 @@ def test_add_to_library_is_idempotent(library_service, user_db):
     assert library_service.is_in_library(user_id=user["id"], book_id=book["id"])
 
 
+def test_add_many_to_library_reports_each_result_and_grants_files(library_service, user_db):
+    user = user_db.create_user(username="bulk-reader")
+    available = _insert_book(
+        library_service,
+        provider_book_id="bulk-available",
+        isbn_13="978-0-812-54042-5",
+    )
+    fileless = library_service.upsert_book_from_metadata(
+        metadata_provider="hardcover",
+        provider_book_id="bulk-fileless",
+        title="Not available",
+        author=None,
+        subtitle=None,
+        publish_year=None,
+        isbn_13=None,
+        cover_url=None,
+        series_name=None,
+        series_position=None,
+        language=None,
+        metadata_json={},
+    )
+
+    first = library_service.add_many_to_library(
+        user_id=user["id"], book_ids=[available["id"], fileless["id"], 999_999]
+    )
+    second = library_service.add_many_to_library(user_id=user["id"], book_ids=[available["id"]])
+
+    assert [item["status"] for item in first] == ["added", "unavailable", "not_found"]
+    assert second[0]["status"] == "already_in_library"
+    conn = sqlite3.connect(library_service._db_path)
+    try:
+        assert (
+            conn.execute(
+                """
+            SELECT COUNT(*) FROM user_file_entitlements ufe
+            JOIN book_files bf ON bf.id = ufe.file_id
+            WHERE ufe.user_id = ? AND bf.book_id = ?
+            """,
+                (user["id"], available["id"]),
+            ).fetchone()[0]
+            == 1
+        )
+    finally:
+        conn.close()
+
+
+def test_add_many_to_library_treats_equivalent_book_membership_as_idempotent(
+    library_service, user_db
+):
+    user = user_db.create_user(username="equivalent-reader")
+    canonical = _insert_book(
+        library_service,
+        provider="hardcover",
+        provider_book_id="bulk-equivalent-a",
+        isbn_13="978-0-13-235088-4",
+    )
+    equivalent = _insert_book(
+        library_service,
+        provider="openlibrary",
+        provider_book_id="bulk-equivalent-b",
+        isbn_13="978-0-13-235088-4",
+    )
+    conn = sqlite3.connect(library_service._db_path)
+    try:
+        conn.execute(
+            "INSERT INTO user_library (user_id, book_id) VALUES (?, ?)",
+            (user["id"], equivalent["id"]),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = library_service.add_many_to_library(user_id=user["id"], book_ids=[canonical["id"]])
+
+    assert result[0]["status"] == "already_in_library"
+    conn = sqlite3.connect(library_service._db_path)
+    try:
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM user_library WHERE user_id = ?",
+                (user["id"],),
+            ).fetchone()[0]
+            == 1
+        )
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM user_file_entitlements WHERE user_id = ?",
+                (user["id"],),
+            ).fetchone()[0]
+            == 2
+        )
+    finally:
+        conn.close()
+
+
+def test_add_many_to_library_rolls_back_on_unexpected_database_error(library_service, user_db):
+    user = user_db.create_user(username="rollback-reader")
+    book = _insert_book(
+        library_service,
+        provider_book_id="bulk-rollback",
+        isbn_13="978-0-812-54043-2",
+    )
+    conn = sqlite3.connect(library_service._db_path)
+    try:
+        conn.execute(
+            """
+            CREATE TRIGGER fail_bulk_entitlement
+            BEFORE INSERT ON user_file_entitlements
+            BEGIN
+                SELECT RAISE(ABORT, 'forced entitlement failure');
+            END
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    with pytest.raises(sqlite3.IntegrityError, match="forced entitlement failure"):
+        library_service.add_many_to_library(user_id=user["id"], book_ids=[book["id"]])
+
+    assert not library_service.is_in_library(user_id=user["id"], book_id=book["id"])
+
+
 def test_remove_from_library_hard_deletes_membership(library_service, user_db):
     user = user_db.create_user(username="alice")
     book = _insert_book(library_service)

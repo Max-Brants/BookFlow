@@ -94,6 +94,7 @@ class CatalogMonitorService:
     def catalog_books(
         self,
         *,
+        user_id: int | None = None,
         query: str | None,
         author_id: int | None,
         series_id: int | None,
@@ -145,6 +146,8 @@ class CatalogMonitorService:
             "year": "publish_year IS NULL, publish_year DESC, title COLLATE NOCASE, id",
         }[sort]
         group_key = book_group_key_sql("matching")
+        ranked_group_key = book_group_key_sql("ranked")
+        library_group_key = book_group_key_sql("library_book")
         with self._connect() as conn:
             # joins/order are selected from fixed literals above, never request text.
             cte = f"""
@@ -168,19 +171,24 @@ class CatalogMonitorService:
             )
             rows = conn.execute(
                 f"""{cte}
-                    SELECT ranked.*, COALESCE((
+                    SELECT ranked.*, EXISTS (
+                        SELECT 1 FROM user_library ul
+                        JOIN books library_book ON library_book.id = ul.book_id
+                        WHERE ul.user_id = ? AND {library_group_key} = {ranked_group_key}
+                    ) AS in_library, COALESCE((
                         SELECT json_group_array(DISTINCT bf.file_format)
                         FROM book_files bf
                         WHERE bf.book_id = ranked.id AND bf.import_status = 'imported'
                     ), '[]') AS formats_json
                     FROM ranked WHERE catalog_rank = 1
                     ORDER BY {order} LIMIT ? OFFSET ?""",  # noqa: S608
-                [*params, self._page(limit), max(0, offset)],
+                [*params, user_id or 0, self._page(limit), max(0, offset)],
             ).fetchall()
         items = []
         for row in rows:
             item = dict(row)
             item.pop("catalog_rank", None)
+            item["in_library"] = bool(item["in_library"])
             item["formats"] = json.loads(item.pop("formats_json"))
             items.append(item)
         return {
@@ -190,8 +198,10 @@ class CatalogMonitorService:
             "limit": self._page(limit),
         }
 
-    def recent(self, *, offset: int, limit: int) -> dict[str, Any]:
+    def recent(self, *, user_id: int | None = None, offset: int, limit: int) -> dict[str, Any]:
         group_key = book_group_key_sql("matching")
+        ranked_group_key = book_group_key_sql("ranked")
+        library_group_key = book_group_key_sql("library_book")
         cte = f"""
             WITH matching AS (
                 SELECT b.*, COALESCE(MAX(imported_bf.imported_at), b.created_at) AS added_at
@@ -217,19 +227,24 @@ class CatalogMonitorService:
             )
             rows = conn.execute(
                 f"""{cte}
-                   SELECT ranked.*, COALESCE((
+                   SELECT ranked.*, EXISTS (
+                       SELECT 1 FROM user_library ul
+                       JOIN books library_book ON library_book.id = ul.book_id
+                       WHERE ul.user_id = ? AND {library_group_key} = {ranked_group_key}
+                   ) AS in_library, COALESCE((
                        SELECT json_group_array(DISTINCT bf.file_format)
                        FROM book_files bf
                        WHERE bf.book_id = ranked.id AND bf.import_status = 'imported'
                    ), '[]') AS formats_json
                    FROM ranked WHERE catalog_rank = 1
                    ORDER BY added_at DESC, id DESC LIMIT ? OFFSET ?""",  # noqa: S608
-                (self._page(limit), max(0, offset)),
+                (user_id or 0, self._page(limit), max(0, offset)),
             ).fetchall()
         items = []
         for row in rows:
             item = dict(row)
             item.pop("catalog_rank", None)
+            item["in_library"] = bool(item["in_library"])
             item["formats"] = json.loads(item.pop("formats_json"))
             items.append(item)
         return {

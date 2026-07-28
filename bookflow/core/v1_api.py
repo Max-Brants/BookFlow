@@ -21,6 +21,7 @@ from bookflow.core.book_groups import canonical_book_id, equivalent_book_ids
 from bookflow.core.book_matcher import normalize_isbn
 from bookflow.core.catalog_monitor_service import CatalogMonitorError, CatalogMonitorService
 from bookflow.core.durable_jobs import DurableJobService
+from bookflow.core.library_service import LibraryService
 from bookflow.core.release_candidates import ReleaseCandidate, evaluate_candidate
 from bookflow.core.release_profile_service import (
     ReleaseProfileError,
@@ -67,6 +68,7 @@ def register_v1_api(
     profile_service = ReleaseProfileService(db_path)
     job_service = DurableJobService(db_path)
     catalog_service = CatalogMonitorService(db_path)
+    library_service = LibraryService(db_path)
     suggestion_service = BestsellerSuggestionService(db_path)
     blueprint = Blueprint("v1", __name__, url_prefix="/api/v1")
 
@@ -178,6 +180,35 @@ def register_v1_api(
                             "limit": {"type": "integer", "minimum": 1},
                         },
                     },
+                    "BulkLibraryRequest": {
+                        "type": "object",
+                        "required": ["book_ids"],
+                        "properties": {
+                            "book_ids": {
+                                "type": "array",
+                                "minItems": 1,
+                                "maxItems": 100,
+                                "items": {"type": "integer", "minimum": 1},
+                            }
+                        },
+                    },
+                    "BulkLibraryResult": {
+                        "type": "object",
+                        "required": ["book_id", "status"],
+                        "properties": {
+                            "book_id": {"type": "integer", "minimum": 1},
+                            "canonical_book_id": {"type": "integer", "minimum": 1},
+                            "status": {
+                                "type": "string",
+                                "enum": [
+                                    "added",
+                                    "already_in_library",
+                                    "unavailable",
+                                    "not_found",
+                                ],
+                            },
+                        },
+                    },
                     "Error": {
                         "type": "object",
                         "required": ["error"],
@@ -198,6 +229,41 @@ def register_v1_api(
             "paths": {
                 "/api/v1/library/books": {
                     "get": {"summary": "List books on the personal library shelf"}
+                },
+                "/api/v1/library/books/bulk": {
+                    "post": {
+                        "summary": "Add available catalog books to the personal library",
+                        "requestBody": {
+                            "required": True,
+                            "content": {
+                                "application/json": {
+                                    "schema": {"$ref": "#/components/schemas/BulkLibraryRequest"}
+                                }
+                            },
+                        },
+                        "responses": {
+                            "200": {
+                                "description": "Per-book outcomes and aggregate counts",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "required": ["results", "summary"],
+                                            "properties": {
+                                                "results": {
+                                                    "type": "array",
+                                                    "items": {
+                                                        "$ref": "#/components/schemas/BulkLibraryResult"
+                                                    },
+                                                },
+                                                "summary": {"type": "object"},
+                                            },
+                                        }
+                                    }
+                                },
+                            }
+                        },
+                    }
                 },
                 "/api/v1/library/books/{bookId}": {"get": {"summary": "Get an entitled book"}},
                 "/api/v1/requests": {"post": {"summary": "Create a request"}},
@@ -548,9 +614,12 @@ def register_v1_api(
     @blueprint.get("/catalog/recent")
     @require_actor()
     def catalog_recent() -> Response | tuple[Response, int]:
+        actor: V1Actor = g.v1_actor
         try:
             offset, limit = page()
-            return jsonify(catalog_service.recent(offset=offset, limit=limit))
+            return jsonify(
+                catalog_service.recent(user_id=actor.user_id, offset=offset, limit=limit)
+            )
         except ValueError as exc:
             return error("invalid_pagination", str(exc), 400)
 
@@ -601,6 +670,7 @@ def register_v1_api(
     @blueprint.get("/catalog/books")
     @require_actor()
     def catalog_books() -> Response | tuple[Response, int]:
+        actor: V1Actor = g.v1_actor
         try:
             offset, limit = page()
             author = request.args.get("author_id")
@@ -611,6 +681,7 @@ def register_v1_api(
                 raise ValueError("author_id and series_id must be positive integers")  # noqa: TRY301
             return jsonify(
                 catalog_service.catalog_books(
+                    user_id=actor.user_id,
                     query=request.args.get("q"),
                     author_id=author_id,
                     series_id=series_id,
@@ -622,6 +693,41 @@ def register_v1_api(
             )
         except (ValueError, CatalogMonitorError) as exc:
             return error("invalid_catalog_query", str(exc), 400)
+
+    @blueprint.post("/library/books/bulk")
+    @require_actor()
+    def bulk_add_library_books() -> Response | tuple[Response, int]:
+        actor: V1Actor = g.v1_actor
+        payload = request.get_json(silent=True)
+        raw_book_ids = payload.get("book_ids") if isinstance(payload, dict) else None
+        if not isinstance(raw_book_ids, list) or not 1 <= len(raw_book_ids) <= 100:
+            return error(
+                "invalid_book_ids",
+                "book_ids must be a list containing between 1 and 100 positive integers",
+                400,
+            )
+
+        book_ids: list[int] = []
+        seen: set[int] = set()
+        for raw_book_id in raw_book_ids:
+            if isinstance(raw_book_id, bool) or not isinstance(raw_book_id, int) or raw_book_id < 1:
+                return error(
+                    "invalid_book_ids",
+                    "book_ids must contain only positive integers",
+                    400,
+                )
+            if raw_book_id not in seen:
+                seen.add(raw_book_id)
+                book_ids.append(raw_book_id)
+
+        results = library_service.add_many_to_library(user_id=actor.user_id, book_ids=book_ids)
+        summary = {
+            "submitted": len(book_ids),
+            "added": sum(item["status"] == "added" for item in results),
+            "already_in_library": sum(item["status"] == "already_in_library" for item in results),
+            "failed": sum(item["status"] in {"unavailable", "not_found"} for item in results),
+        }
+        return jsonify({"results": results, "summary": summary})
 
     @blueprint.post("/catalog/presence")
     @require_actor()

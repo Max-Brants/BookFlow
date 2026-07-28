@@ -25,9 +25,17 @@ def client(tmp_path: Path):
                 book_id INTEGER, identifier_type TEXT, identifier TEXT
             );
             CREATE TABLE book_files (id INTEGER PRIMARY KEY, book_id INTEGER, file_format TEXT, size_bytes INTEGER,
-                mime_type TEXT, imported_at TEXT, import_status TEXT);
-            CREATE TABLE user_file_entitlements (user_id INTEGER, file_id INTEGER, granted_at TEXT);
-            CREATE TABLE user_library (user_id INTEGER, book_id INTEGER, added_at TEXT);
+                mime_type TEXT, imported_at TEXT, import_status TEXT,
+                content_type TEXT NOT NULL DEFAULT 'ebook');
+            CREATE TABLE user_file_entitlements (
+                user_id INTEGER, file_id INTEGER, granted_at TEXT,
+                grant_source TEXT NOT NULL DEFAULT 'direct',
+                UNIQUE (user_id, file_id)
+            );
+            CREATE TABLE user_library (
+                user_id INTEGER, book_id INTEGER, added_at TEXT,
+                UNIQUE (user_id, book_id)
+            );
             CREATE TABLE user_kobo_books (
                 user_id INTEGER, book_id INTEGER, desired_state TEXT, revision INTEGER
             );
@@ -46,12 +54,12 @@ def client(tmp_path: Path):
                 (11, 'Private', 'Other', 'en', 2021, NULL, NULL, 1),
                 (12, 'Entitled only', 'Other', 'en', 2022, NULL, NULL, 1),
                 (13, 'Requested only', 'Other', 'en', 2023, NULL, NULL, 1);
-            INSERT INTO book_files VALUES (100, 10, 'epub', 42, 'application/epub+zip', '2026-01-01', 'imported');
-            INSERT INTO book_files VALUES (101, 11, 'epub', 43, 'application/epub+zip', '2026-01-01', 'imported');
-            INSERT INTO book_files VALUES (102, 12, 'epub', 44, 'application/epub+zip', '2026-01-01', 'imported');
-            INSERT INTO user_file_entitlements VALUES (1, 100, '2026-01-01');
-            INSERT INTO user_file_entitlements VALUES (2, 101, '2026-01-01');
-            INSERT INTO user_file_entitlements VALUES (1, 102, '2026-01-01');
+            INSERT INTO book_files VALUES (100, 10, 'epub', 42, 'application/epub+zip', '2026-01-01', 'imported', 'ebook');
+            INSERT INTO book_files VALUES (101, 11, 'epub', 43, 'application/epub+zip', '2026-01-01', 'imported', 'ebook');
+            INSERT INTO book_files VALUES (102, 12, 'epub', 44, 'application/epub+zip', '2026-01-01', 'imported', 'ebook');
+            INSERT INTO user_file_entitlements VALUES (1, 100, '2026-01-01', 'direct');
+            INSERT INTO user_file_entitlements VALUES (2, 101, '2026-01-01', 'direct');
+            INSERT INTO user_file_entitlements VALUES (1, 102, '2026-01-01', 'direct');
             INSERT INTO user_library VALUES (1, 10, '2026-01-02');
             INSERT INTO user_kobo_books VALUES (1, 10, 'active', 1);
             INSERT INTO user_reading_progress VALUES (1, 10, 42.5, 1, 'web', '2026-01-03');
@@ -87,6 +95,74 @@ def test_library_contract_and_idor_protection(client) -> None:
     assert denied.status_code == 404
     assert denied.json["error"]["code"] == "book_not_found"
     assert denied.json["error"]["correlation_id"]
+
+    catalog = client.get("/api/v1/catalog/books")
+    assert catalog.status_code == 200
+    membership = {item["id"]: item["in_library"] for item in catalog.json["items"]}
+    assert membership[10] is True
+    assert membership[11] is False
+
+
+def test_bulk_add_library_books_is_idempotent_and_reports_partial_results(client) -> None:
+    response = client.post(
+        "/api/v1/library/books/bulk",
+        json={"book_ids": [11, 11, 10, 13, 999]},
+    )
+
+    assert response.status_code == 200
+    assert response.json["summary"] == {
+        "submitted": 4,
+        "added": 1,
+        "already_in_library": 1,
+        "failed": 2,
+    }
+    assert [(item["book_id"], item["status"]) for item in response.json["results"]] == [
+        (11, "added"),
+        (10, "already_in_library"),
+        (13, "unavailable"),
+        (999, "not_found"),
+    ]
+
+    second = client.post("/api/v1/library/books/bulk", json={"book_ids": [11]})
+    assert second.status_code == 200
+    assert second.json["results"][0]["status"] == "already_in_library"
+
+
+def test_bulk_add_library_books_requires_authentication(tmp_path: Path) -> None:
+    app = Flask(__name__)
+    app.config["TESTING"] = True
+    register_v1_api(
+        app,
+        database_path=tmp_path / "unauthenticated.sqlite",
+        resolve_actor=lambda: None,
+    )
+
+    response = app.test_client().post(
+        "/api/v1/library/books/bulk",
+        json={"book_ids": [10]},
+    )
+
+    assert response.status_code == 401
+    assert response.json["error"]["code"] == "unauthorized"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        None,
+        {},
+        {"book_ids": []},
+        {"book_ids": [0]},
+        {"book_ids": [True]},
+        {"book_ids": ["10"]},
+        {"book_ids": list(range(1, 102))},
+    ],
+)
+def test_bulk_add_library_books_validates_payload(client, payload) -> None:
+    response = client.post("/api/v1/library/books/bulk", json=payload)
+
+    assert response.status_code == 400
+    assert response.json["error"]["code"] == "invalid_book_ids"
 
 
 def test_library_kobo_shelf_only_returns_active_personal_kobo_books(client) -> None:

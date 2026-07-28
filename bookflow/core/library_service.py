@@ -258,6 +258,87 @@ class LibraryService:
             finally:
                 conn.close()
 
+    def add_many_to_library(self, *, user_id: int, book_ids: list[int]) -> list[dict[str, Any]]:
+        """Add available Books in one transaction and report each outcome.
+
+        Expected domain failures are isolated per Book. Unexpected database
+        failures abort the transaction so callers never observe a half-written
+        batch.
+        """
+        normalized_user_id = normalize_positive_int(user_id)
+        if normalized_user_id is None:
+            raise ValueError("user_id must be a positive integer")
+
+        normalized_book_ids = [self._book_identity(book_id) for book_id in book_ids]
+        with self._lock:
+            conn = self._connect()
+            try:
+                results: list[dict[str, Any]] = []
+                for requested_book_id in normalized_book_ids:
+                    equivalent_ids = equivalent_book_ids(conn, requested_book_id)
+                    if not equivalent_ids:
+                        results.append({"book_id": requested_book_id, "status": "not_found"})
+                        continue
+
+                    representative_id = canonical_book_id(conn, equivalent_ids)
+                    placeholders = ",".join("?" for _ in equivalent_ids)
+                    file_rows = conn.execute(
+                        f"""
+                        SELECT id FROM book_files
+                        WHERE book_id IN ({placeholders})
+                          AND import_status = 'imported'
+                          AND content_type = 'ebook'
+                        ORDER BY id
+                        """,  # noqa: S608 - only the placeholder count is generated.
+                        equivalent_ids,
+                    ).fetchall()
+                    if not file_rows:
+                        results.append({"book_id": requested_book_id, "status": "unavailable"})
+                        continue
+
+                    existing_membership = conn.execute(
+                        f"""
+                        SELECT 1 FROM user_library
+                        WHERE user_id = ? AND book_id IN ({placeholders})
+                        LIMIT 1
+                        """,  # noqa: S608 - only the placeholder count is generated.
+                        (normalized_user_id, *equivalent_ids),
+                    ).fetchone()
+                    if existing_membership is None:
+                        conn.execute(
+                            """
+                            INSERT INTO user_library (user_id, book_id, added_at)
+                            VALUES (?, ?, ?)
+                            """,
+                            (normalized_user_id, representative_id, _now_utc_iso()),
+                        )
+                    for file_row in file_rows:
+                        conn.execute(
+                            """
+                            INSERT OR IGNORE INTO user_file_entitlements (
+                                user_id, file_id, grant_source
+                            ) VALUES (?, ?, 'direct')
+                            """,
+                            (normalized_user_id, int(file_row["id"])),
+                        )
+                    results.append(
+                        {
+                            "book_id": requested_book_id,
+                            "canonical_book_id": representative_id,
+                            "status": (
+                                "added" if existing_membership is None else "already_in_library"
+                            ),
+                        }
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            else:
+                return results
+            finally:
+                conn.close()
+
     def remove_from_library(self, *, user_id: int, book_id: int) -> bool:
         """Hard-delete the user's library row for a book. Returns True when deleted."""
         normalized_user_id = normalize_positive_int(user_id)

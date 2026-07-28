@@ -335,6 +335,38 @@ describe('v1 API client', () => {
     }
   });
 
+  it('posts stable book ids to the bulk library endpoint', async () => {
+    const originalFetch = globalThis.fetch;
+    const requests: Array<{ url: string; method: string; body: string | null }> = [];
+    globalThis.fetch = async (input, init) => {
+      requests.push({
+        url: input instanceof Request ? input.url : String(input),
+        method: init?.method ?? 'GET',
+        body: typeof init?.body === 'string' ? init.body : null,
+      });
+      return new Response(
+        JSON.stringify({
+          results: [{ book_id: 10, canonical_book_id: 10, status: 'added' }],
+          summary: { submitted: 1, added: 1, already_in_library: 0, failed: 0 },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    };
+    try {
+      await expect(v1Api.bulkAddLibraryBooks([10])).resolves.toMatchObject({
+        summary: { added: 1 },
+      });
+      expect(requests).toHaveLength(1);
+      expect(requests[0]?.url).toContain('/api/v1/library/books/bulk');
+      expect(requests[0]).toMatchObject({
+        method: 'POST',
+        body: '{"book_ids":[10]}',
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it('sends monitor definition fields and can ignore or restore an owned discovery', async () => {
     const originalFetch = globalThis.fetch;
     const requests: Array<{ url: string; method: string; body: string | null }> = [];

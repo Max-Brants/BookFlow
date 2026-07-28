@@ -1,7 +1,9 @@
 import { useCallback, useState } from 'react';
 
+import { BulkLibraryActionBar } from '../components/BulkLibraryActionBar';
 import { DashboardShelf, PosterCard, RequestCard } from '../components/dashboard';
 import { useLanguage } from '../contexts/LanguageContext';
+import { useBulkLibrarySelection } from '../hooks/useBulkLibrarySelection';
 import { useDependencyEffect } from '../hooks/useMountEffect';
 import { v1Api } from '../services/v1Api';
 import type {
@@ -29,6 +31,7 @@ export const DashboardPage = () => {
   });
   const [errors, setErrors] = useState<Partial<Record<DashboardSectionKey, string>>>({});
   const [loading, setLoading] = useState(true);
+  const trendingBulk = useBulkLibrarySelection('dashboard-trending');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -125,14 +128,27 @@ export const DashboardPage = () => {
         href="/suggestions/overall"
         hrefLabel={t('dashboard.viewTrending')}
         meta={
-          suggestions.snapshot ? (
-            <span className="hidden rounded-full border border-(--border-muted) bg-(--bg-soft) px-2.5 py-1 text-[11px] opacity-60 sm:inline">
-              {t('dashboard.trendingWeek', {
-                week: suggestions.snapshot.week,
-                year: suggestions.snapshot.year,
-              })}
-            </span>
-          ) : undefined
+          <div className="flex items-center gap-2">
+            {suggestions.snapshot && (
+              <span className="hidden rounded-full border border-(--border-muted) bg-(--bg-soft) px-2.5 py-1 text-[11px] opacity-60 sm:inline">
+                {t('dashboard.trendingWeek', {
+                  week: suggestions.snapshot.week,
+                  year: suggestions.snapshot.year,
+                })}
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={() => trendingBulk.setActive(!trendingBulk.active)}
+              className={`rounded-full border px-2.5 py-1 text-[11px] font-medium ${
+                trendingBulk.active
+                  ? 'border-violet-500 bg-violet-600 text-white'
+                  : 'border-(--border-muted)'
+              }`}
+            >
+              {trendingBulk.active ? t('bulkLibrary.cancelSelection') : t('bulkLibrary.select')}
+            </button>
+          </div>
         }
         itemCount={trending?.items.length ?? 0}
         loading={loading}
@@ -148,9 +164,37 @@ export const DashboardPage = () => {
             author={book.author}
             coverUrl={book.cover_url}
             badge={`#${index + 1}`}
+            selectionActive={trendingBulk.active}
+            inLibrary={book.in_library}
+            selected={trendingBulk.selected.has(book.id)}
+            onToggleSelection={() => trendingBulk.toggle(book.id)}
           />
         ))}
       </DashboardShelf>
+      <BulkLibraryActionBar
+        visible={trendingBulk.active}
+        selectedCount={trendingBulk.selected.size}
+        busy={trendingBulk.busy}
+        limitReached={trendingBulk.limitReached}
+        response={trendingBulk.response}
+        error={trendingBulk.error}
+        onSelectPage={() => trendingBulk.selectPage(trending?.items ?? [])}
+        onClear={trendingBulk.clear}
+        onCancel={() => trendingBulk.setActive(false)}
+        onSubmit={() =>
+          void trendingBulk.submit((successfulIds) => {
+            setSuggestions((current) => ({
+              ...current,
+              lists: current.lists.map((list) => ({
+                ...list,
+                items: list.items.map((book) =>
+                  successfulIds.has(book.id) ? { ...book, in_library: true } : book,
+                ),
+              })),
+            }));
+          })
+        }
+      />
     </section>
   );
 };
