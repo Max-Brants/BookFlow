@@ -11,7 +11,7 @@ file. Keep this file out of source control and restrict it to the account that
 operates Docker.
 
 ```dotenv
-BOOKFLOW_IMAGE=ghcr.io/muneebabbas/bookflow@sha256:<published-release-digest>
+BOOKFLOW_IMAGE=ghcr.io/timminater/bookflow@sha256:<published-release-digest>
 ```
 
 Use `BOOKFLOW_LITE_IMAGE` with an equivalent digest when using

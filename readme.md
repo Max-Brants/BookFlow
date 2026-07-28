@@ -1,287 +1,338 @@
-# 📚 BookFlow: Book Search & Request Tool
+# BookFlow
 
-<img src="src/frontend/public/logo.png" alt="BookFlow" width="200">
+<p align="center">
+  <img src="src/frontend/public/bookflow-mark.png" alt="BookFlow logo" width="180">
+</p>
 
-> [!NOTE]
-> This project is in a stable state as of May 2026 but is not under active maintenance.
+<p align="center">
+  A self-hosted catalog, request, acquisition, and delivery platform for ebooks.
+</p>
 
-BookFlow is a self-hosted web interface for searching and requesting ebooks across multiple sources. Bring your own sources, metadata providers, and download clients to build a single hub for your digital library. Supports multiple users with a built-in request system, so you can share your instance with others and let them browse and request books on their own.
+BookFlow brings discovery, requests, release selection, downloads, a shared
+catalog, personal libraries, Kobo delivery, and operations into one web
+application. You choose the metadata providers, release sources, download
+clients, and library destinations; BookFlow coordinates the workflow between
+them.
 
-Works great alongside the following library tools, with support for automatic imports:
-- [Calibre](https://calibre-ebook.com/)
-- [Calibre-Web](https://github.com/janeczku/calibre-web)
-- [Calibre-Web-Automated](https://github.com/crocodilestick/Calibre-Web-Automated)
-- [Grimmory](https://github.com/grimmory-tools/grimmory)
+Version 1.0.0 is the first standalone BookFlow release.
 
-## ✨ Features
+## Highlights
 
-- **One-Stop Interface** - A clean, modern UI to search, browse, and download from multiple configured sources in one place
-- **Multiple Sources** - Configurable web, torrent, usenet, and IRC source support
-- **Flexible Search** - Search metadata providers (Hardcover, Open Library, Google Books) for rich ebook discovery, or query configured sources directly
-- **Multi-User & Requests** - Share your instance with others, let users browse and request books, and manage approvals with configurable notifications
-- **Authentication** - Built-in login, OIDC single sign-on, proxy auth, and Calibre-Web database support
-- **Real-Time Progress** - Unified download queue with live status updates across all sources
-- **Network Flexibility** - Configurable proxy support, DNS settings, and optional Cloudflare handling for protected sources
+- **Shared catalog and personal libraries** — Books are canonical catalog
+  records backed by imported files. Library membership, file access, downloads,
+  reading progress, and Kobo shelves remain scoped to each user.
+- **Request lifecycle** — Users request unavailable books, administrators
+  approve or reject them, and one durable request process coordinates all
+  approved requesters for the same book.
+- **Release profiles** — Define formats, languages, protocols, indexers, size
+  limits, seed requirements, scoring rules, blocked terms, and the minimum
+  automatic score.
+- **Automatic and interactive search** — Automatically select the best eligible
+  candidate or let an administrator inspect scores and rejection reasons,
+  force-select a candidate, and retain an audit trail.
+- **Multiple acquisition paths** — Direct HTTP downloads, Prowlarr/Newznab,
+  torrent and usenet clients, and IRC sources can feed the same validated import
+  pipeline.
+- **Rich metadata** — Integrations include Hardcover, Open Library, Google
+  Books, Apple Books, KB/Nationale Bibliotheek, and DBNL.
+- **Discovery and monitoring** — Browse the shared catalog, search with SQLite
+  FTS5, discover recent additions and Bestseller 60 suggestions, and monitor
+  supported authors or series.
+- **Kobo integration** — Per-device tokens, library sync, reading progress,
+  durable shelf intent, verified EPUB-to-KEPUB conversion, and a Windows Kobo
+  patcher with a short-lived pairing flow.
+- **Multi-user authentication** — Local accounts, OIDC, trusted reverse-proxy
+  authentication, and optional Calibre-Web user database synchronization.
+- **PWA and notifications** — Installable web app, offline application shell,
+  update prompts, and per-user web-push rules.
+- **Operations built in** — Versioned database migrations, integrity checks,
+  encrypted backups, staged restore, health/readiness endpoints, metrics,
+  structured redacted logging, and administrative audit views.
+- **Hardened processing** — Entitlement checks, CSRF/origin protection, SSRF
+  controls, path confinement, archive limits, idempotent jobs, and secret
+  redaction are enforced server-side.
 
-## 🖼️ Screenshots
+## Screenshots
 
-**Home screen**
-![Home screen](README_images/homescreen.png 'Home screen')
+| Home | Search results |
+| --- | --- |
+| ![BookFlow home](README_images/homescreen.png) | ![BookFlow search results](README_images/search-results.png) |
 
-**Search results**
-![Search results](README_images/search-results.png 'Search results')
+| Multiple sources | Download activity |
+| --- | --- |
+| ![BookFlow multi-source view](README_images/multi-source.png) | ![BookFlow downloads](README_images/downloads.png) |
 
-**Multi-source downloads**
-![Multi-source downloads](README_images/multi-source.png 'Multi-source downloads')
+## Docker images
 
-**Download queue**
-![Download queue](README_images/downloads.png 'Download queue')
+Release tags publish attested multi-architecture images for `linux/amd64` and
+`linux/arm64` to GitHub Container Registry.
 
-## 🚀 Quick Start
+| Image | Purpose |
+| --- | --- |
+| `ghcr.io/timminater/bookflow` | Full image with built-in Chromium browser automation |
+| `ghcr.io/timminater/bookflow-lite` | Smaller image for external bypassers or sources that do not need browser automation |
 
-### Prerequisites
+Published version tags include `latest`, `1.0.0`, `1.0`, `v1.0.0`, and a
+commit-SHA tag. Production deployments should use a version tag or, preferably,
+the immutable digest shown by GHCR.
 
-- Docker & Docker Compose
+## Quick start with Docker Compose
 
-### Installation
+Download the standard Compose file:
 
-1. Download the [docker-compose file](compose/docker-compose.yml) from this fork and pin the exact image digest in `.env`:
-   ```bash
-   curl -O https://raw.githubusercontent.com/muneebabbas/bookflow/main/compose/docker-compose.yml
-   printf '%s\n' 'BOOKFLOW_IMAGE=ghcr.io/muneebabbas/bookflow@sha256:<published-release-digest>' > .env
-   ```
-
-2. Validate and start the service:
-   ```bash
-   docker compose config
-   docker compose up -d
-   ```
-
-3. Open `http://localhost:8084`
-
-Open the web interface, then configure the sources and settings you want to use.
-
-### Volume Setup
-
-```yaml
-volumes:
-  - /your/config/path:/config # Config, database, and artwork cache directory
-  - /your/download/path:/books # Downloaded books
-  - /client/path:/client/path # Optional: For Torrent/Usenet downloads, match your client directory exactly.
+```bash
+curl -O https://raw.githubusercontent.com/Timminater/BookFlow/main/compose/docker-compose.yml
 ```
 
-> **Tip**: Point the download volume to your CWA or Grimmory ingest folder for automatic import.
+Create `.env` beside it:
 
-> **Note**: CIFS shares require `nobrl` mount option to avoid database lock errors.
+```dotenv
+BOOKFLOW_IMAGE=ghcr.io/timminater/bookflow:1.0.0
+```
 
-### Non-root container mode
+Start BookFlow:
 
-- Start the container as `1000:1000` with Docker `user: "1000:1000"` or `docker run --user 1000:1000`.
-- For Kubernetes, set `runAsUser: 1000`, `runAsGroup: 1000`, and `runAsNonRoot: true` together.
-- `PUID`/`PGID` keep the default root startup flow.
-- Mounted paths must already be writable by `1000:1000`.
-- `USING_TOR=true` requires root startup.
-
-## ⚙️ Configuration
-
-### Environment Variables
-
-Environment variables work for initial setup and Docker deployments. They serve as defaults that can be overridden in the web interface.
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `FLASK_PORT` | Web interface port | `8084` |
-| `INGEST_DIR` | Book download directory | `/books` |
-| `TZ` | Container timezone | `UTC` |
-| `PUID` / `PGID` | Runtime user/group for the default root-startup flow (also supports legacy `UID`/`GID`) | `1000` / `1000` |
-| `USING_TOR` | Enable Tor routing (requires root startup) | `false` |
-| `USING_WIREGUARD` | Enable WireGuard VPN egress with kill-switch (requires root startup) | `false` |
-| `WIREGUARD_CONFIG` | Path to the mounted wg-quick config | `/config/wg0.conf` |
-| `WIREGUARD_INTERFACE` | WireGuard interface name | `wg0` |
-| `LAN_NETWORK` | Comma-separated CIDRs kept off the tunnel so the WebUI / internal clients stay reachable | `127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16` |
-| `WIREGUARD_ENFORCE_DNS` | Pin the resolver (via `WIREGUARD_DNS`, else the config's `DNS =`) so DNS can't silently fall back to an off-tunnel path. Designed for a trusted LAN resolver kept reachable via `LAN_NETWORK` (query leaves over the LAN; download still egresses via the tunnel) — it does **not** force queries through the tunnel. Docker's embedded resolver (`127.0.0.11`) is preserved when present so container-name resolution keeps working; pin its upstream via the container's `dns:` list. Fails closed if no resolver is available or `/etc/resolv.conf` is not writable. | `true` |
-| `WIREGUARD_DNS` | Explicit resolver(s) to pin (comma/space separated). Use when the VPN's pushed DNS filters domains you need; point at a resolver reachable via the tunnel or an allowed LAN resolver. | _(unset; uses config `DNS =`)_ |
-| `WIREGUARD_DISABLE_IPV6` | Strip IPv6 from the tunnel config (many container kernels lack the ip6tables `raw` table wg-quick needs) and remove IPv6 as a leak surface. | `true` |
-| `WIREGUARD_ALLOW_IPV6_LEAK` | Escape hatch: continue even when an IPv6 kill-switch can't be installed AND IPv6 can't be disabled. Only set if the container has no IPv6 connectivity. | `false` |
-| `WIREGUARD_ALLOW_WEBUI_OFFTUNNEL` | Opt-in off-tunnel WebUI reachability. Default (`false`) keeps the kill-switch strictly fail-closed: the only off-tunnel egress is loopback, the tunnel device and the LAN allowlist. Set `true` only if a **non-LAN** client (e.g. a public reverse proxy on another segment) must reach the WebUI; it permits app-server **replies** (`--sport FLASK_PORT`, conntrack REPLY) off-tunnel — server replies only, never client-initiated egress. LAN clients never need it (covered by `LAN_NETWORK`). | `false` |
-| `WIREGUARD_STALE_AFTER` | Seconds since the last handshake before the healthcheck bounces the tunnel. | `180` |
-
-See the full [Environment Variables Reference](docs/environment-variables.md) for all available options.
-
-Some of the additional options available in Settings:
-- **Prowlarr** - Configure indexers and download clients to download ebooks
-- **IRC** - Add details for IRC book sources and download directly from the UI
-- **Requests & Request Process** - Admin requests are approved immediately; user requests are approved by an admin and share one release process automatically
-- **Release Profiles** - Configure source, format, language and scoring preferences; admins can inspect or override interactive-search candidates with an audit trail
-- **File processing** - Customiseable download paths, file renaming and directory creation with template-based renaming
-- **Network Settings** - Custom proxy support (SOCKS5 + HTTP/S) and configurable DNS
-- **Format & Language** - Filter downloads by preferred formats, languages and sorting order
-- **Metadata Providers** - Configure API keys for Hardcover, Open Library, etc.
-
-## 🐳 Docker Variants
-
-### Standard
 ```bash
+docker compose config
 docker compose up -d
 ```
 
-The full-featured image with all network capabilities included.
+Open `http://localhost:8084` and create the first administrator account.
 
-#### Tor Routing
-Optional Tor support for network privacy:
-```bash
-curl -O https://raw.githubusercontent.com/muneebabbas/bookflow/main/compose/docker-compose.tor.yml
-# Create .env first if you did not create it during the standard setup.
-printf '%s\n' 'BOOKFLOW_IMAGE=ghcr.io/muneebabbas/bookflow@sha256:<published-release-digest>' > .env
-docker compose --env-file .env -f docker-compose.tor.yml config
-docker compose --env-file .env -f docker-compose.tor.yml up -d
+For an immutable production pin, replace the version tag with the digest
+published by GHCR:
+
+```dotenv
+BOOKFLOW_IMAGE=ghcr.io/timminater/bookflow@sha256:<release-digest>
 ```
 
-**Notes:**
-- Requires root startup
-- Requires `NET_ADMIN` and `NET_RAW` capabilities
-- Timezone is auto-detected from Tor exit node
-- Custom DNS/proxy settings are ignored when Tor is active
+## Unraid
 
-#### WireGuard VPN Routing
-Optional WireGuard support to route all external egress through a VPN tunnel with a fail-closed kill-switch:
-```bash
-curl -O https://raw.githubusercontent.com/muneebabbas/bookflow/main/compose/docker-compose.wireguard.yml
-# Create .env first if you did not create it during the standard setup.
-printf '%s\n' 'BOOKFLOW_IMAGE=ghcr.io/muneebabbas/bookflow@sha256:<published-release-digest>' > .env
-# place your wg-quick config where the compose mounts /config, as wg0.conf
-docker compose --env-file .env -f docker-compose.wireguard.yml config
-docker compose --env-file .env -f docker-compose.wireguard.yml up -d
-```
+Create a Docker container with these core settings:
 
-**Notes:**
-- Requires root startup
-- Requires `NET_ADMIN` and `NET_RAW` capabilities
-- Mount a standard wg-quick config at `WIREGUARD_CONFIG` (default `/config/wg0.conf`)
-- All non-LAN egress is forced through the tunnel; if the tunnel drops, external traffic **fails closed** while LAN ranges (WebUI, Prowlarr, qBittorrent) stay reachable
-- IPv4 and IPv6 both fail closed. On kernels without a usable `ip6tables`, disable IPv6 for the container (`sysctls: net.ipv6.conf.all.disable_ipv6=1`, as in the compose example) or the container refuses to start rather than risk an IPv6 leak
-- A supervised healthcheck bounces the tunnel if the handshake goes stale, and refreshes the endpoint allow rules so a roaming/rotated peer endpoint can reconnect
-- Mutually exclusive with `USING_TOR`
-- **DNS trust:** `WIREGUARD_DNS` must be a resolver you trust on a trusted network segment. When it is a LAN resolver (kept reachable off-tunnel by `LAN_NETWORK`), the query to that resolver leaves as plaintext UDP/53 on the LAN — the resolver is responsible for encrypting upstream. Two resolver paths exist: (1) when Docker's embedded resolver (`127.0.0.11`) is present it is **preserved** so container names (Prowlarr, qBittorrent) resolve — you MUST pin its upstream to a trusted resolver via the container's compose `dns:` list, since `WIREGUARD_DNS` cannot repoint the embedded resolver from inside the container; (2) otherwise `WIREGUARD_DNS`/the config `DNS =` line is written to `/etc/resolv.conf`. Setting `WIREGUARD_ENFORCE_DNS=false` is a **foot-gun**: with no embedded resolver present the container then uses its inherited resolver, which forwards to the Docker daemon's upstream **off-tunnel**, leaking your DNS. Leave enforcement on unless you have pinned the resolver another way.
+| Unraid setting | Value |
+| --- | --- |
+| Repository | `ghcr.io/timminater/bookflow:latest` |
+| Network type | `bridge` |
+| Web UI port | Host `8084` → container `8084` |
+| Appdata | `/mnt/user/appdata/bookflow` → `/config` |
+| Books/library ingest | Your library path → `/books` |
+| `PUID` / `PGID` | The owner of the mapped host directories, commonly `99` / `100` on Unraid |
+| `TZ` | Your IANA timezone, for example `Europe/Amsterdam` |
 
-### Lite
-A lighter image without the built-in browser automation. Ideal for:
+The `latest` tag makes Unraid update checks convenient. For controlled
+production upgrades, use `ghcr.io/timminater/bookflow:1.0.0` or an immutable
+digest and change it deliberately after taking a backup.
 
-- **External services** - Already running FlareSolverr or similar for other applications
-- **Alternative sources** - Using Prowlarr, IRC, or other configured sources
-- **Ebooks** - Using BookFlow for EPUB, PDF and other supported book formats
+The repository and initial GHCR package may be private. In that case, sign in
+on the Unraid host with a GitHub token that has `read:packages`:
 
 ```bash
-curl -O https://raw.githubusercontent.com/muneebabbas/bookflow/main/compose/docker-compose.lite.yml
-printf '%s\n' 'BOOKFLOW_LITE_IMAGE=ghcr.io/muneebabbas/bookflow-lite@sha256:<published-release-digest>' > .env
-docker compose --env-file .env -f docker-compose.lite.yml config
-docker compose --env-file .env -f docker-compose.lite.yml up -d
+echo "$GHCR_TOKEN" | docker login ghcr.io -u Timminater --password-stdin
 ```
 
-If you need browser-based access with the Lite image, configure an external resolver in Settings.
+Useful optional mappings:
 
-## 🔐 Authentication
+- Mount the exact path reported by qBittorrent, Transmission, SABnzbd, NZBGet,
+  Deluge, or rTorrent when BookFlow must import completed client downloads.
+- Mount a read-only Calibre-Web database at `/auth/app.db` when using
+  Calibre-Web authentication synchronization.
+- Keep `/config/backups`, `/config/.restore-staging`, `/config/kepub-cache`,
+  and `/config/patcher-cache` inside protected appdata.
 
-Authentication is optional but recommended for shared or exposed instances. Multiple authentication methods are available in Settings:
+Do not place the SQLite database on an SMB/NFS share or run multiple BookFlow
+writers against the same `/config` directory.
 
-**1. Single Username/Password**
-
-**2. Proxy (Forward) Authentication**
-
-Proxy auth trusts headers set by your reverse proxy (e.g. `X-Auth-User`). Ensure BookFlow is not directly exposed, and configure your proxy to strip/overwrite these headers for all inbound requests.
-
-**3. OIDC (OpenID Connect)**
-
-Integrate with your identity provider (Authelia, Authentik, Keycloak, etc.) for single sign-on. Supports PKCE flow, auto-discovery, group-based admin mapping, and auto-provisioning of new users.
-
-**4. Calibre-Web Database**
-
-If you're running Calibre-Web, you can reuse its user database by mounting it:
+## Volumes and permissions
 
 ```yaml
 volumes:
-  - /path/to/calibre-web/app.db:/auth/app.db:ro
+  - /path/to/bookflow-config:/config
+  - /path/to/library-or-ingest:/books
+  # Optional: must match the path reported by an external download client.
+  - /path/to/downloads:/data/downloads
 ```
 
-### Multi-User Support
+- `/config` stores settings, the SQLite database, artwork, conversion caches,
+  backups, and restore staging.
+- `/books` is the default destination for validated imported files.
+- Torrent and usenet clients must expose the same container path to BookFlow,
+  or require a configured remote-path mapping.
+- The mapped directories must be writable by the configured `PUID` and `PGID`.
+- A fixed non-root runtime is also supported with UID/GID `1000:1000`.
+- Tor and WireGuard modes require root startup and the documented network
+  capabilities.
 
-With any authentication method enabled, BookFlow supports multi-user management with admin/user roles. Users can configure personal Apprise notifications. Non-admin users only see their own downloads and can submit book requests for admin review. Admins can configure request policies per source to control whether users can download directly, must submit a request, or are blocked entirely.
+Point `/books` at the ingest directory of tools such as Calibre,
+Calibre-Web-Automated, Booklore, or another library manager when you want
+completed books imported automatically.
 
-## Project Scope
+## Configuration
 
-BookFlow manages the request process for a shared book catalog: request a fileless book, approve it where necessary, discover releases, import files, and make the resulting book available to entitled users.
+Most settings can be managed from the administration interface. Environment
+variables are useful for container bootstrap and locked deployment values.
 
-BookFlow intentionally does not:
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `FLASK_PORT` | `8084` | HTTP port inside the container |
+| `CONFIG_DIR` | `/config` | Persistent configuration and database directory |
+| `INGEST_DIR` | `/books` | Default completed-book destination |
+| `PUID` / `PGID` | `1000` / `1000` | Runtime file ownership in root-startup mode |
+| `TZ` | `UTC` | Container timezone |
+| `BASE_PATH` | empty | Optional reverse-proxy subpath |
+| `USING_TOR` | `false` | Route supported traffic through the built-in Tor mode |
+| `USING_WIREGUARD` | `false` | Enable WireGuard with a fail-closed kill switch |
+| `VAPID_PUBLIC_KEY` | unset | Browser web-push public key |
+| `VAPID_PRIVATE_KEY` | unset | Server-only web-push private key |
+| `VAPID_SUBJECT` | unset | `mailto:` or HTTPS VAPID contact |
+| `BACKUP_ENCRYPTION_KEY` | unset | Enable authenticated encryption for backup archives |
 
-- **Replace a reading-library application** - BookFlow manages request processes and entitlements, not reading progress, annotations, or external library metadata
-- **Monitor authors, series, or new releases** - automatic search is request-scoped; there is no author or series monitoring
+See the [environment variable reference](docs/environment-variables.md) for
+the complete list.
 
-These are non-goals, not missing features.
+## Core workflow
 
-## Contributing
+1. Metadata discovery creates or resolves a canonical Book.
+2. A fileless Book can be requested but cannot enter a user's library.
+3. An administrator approves the request; requests for the same Book share one
+   request process.
+4. The selected release profile is snapshotted for deterministic processing.
+5. Automatic search selects the highest eligible candidate, or an administrator
+   uses interactive search.
+6. Durable jobs download, validate, extract, organize, and import files.
+7. Imported files make the Book catalog-visible, fulfil approved requests,
+   grant per-user entitlements, and apply saved Kobo-sync intent.
 
-BookFlow's core feature set is complete. Development focuses on stability, bug fixes, quality-of-life improvements, and refining the search experience. Contributions in these areas are welcome, please file issues or submit pull requests on GitHub.
+## Authentication and access
 
-Feature requests that fall outside the project scope (library integration, automation, collection management) will be closed. If you're unsure whether something fits, open a discussion first.
+BookFlow supports:
 
-## Health Monitoring
+- local usernames and passwords;
+- OpenID Connect with discovery, PKCE, automatic provisioning, and optional
+  group-based administrator mapping;
+- trusted reverse-proxy headers;
+- read-only Calibre-Web `app.db` synchronization.
 
-The application exposes a health endpoint at `/api/health` (no authentication required). Add a health check to your compose:
+Administrator status and library capability are separate. A user can be
+download-capable or request-only. File serving, libraries, requests, downloads,
+Kobo shelves, and progress are always checked against the authenticated actor
+and stored entitlements.
 
-```yaml
-healthcheck:
-  test: ["CMD", "curl", "-sf", "http://localhost:8084/api/health"]
-  interval: 30s
-  timeout: 30s
-  retries: 3
+When proxy authentication is enabled, expose BookFlow only through the trusted
+proxy and make the proxy strip and replace identity headers.
+
+## Kobo and KEPUB
+
+BookFlow provides a Kobo-compatible API under a per-device secret URL. The
+Reader settings page can create a ten-minute pairing code for the Windows
+patcher, which changes only Kobo's `api_endpoint` setting and keeps recoverable
+backups.
+
+Official images bundle and verify `kepubify` for both supported architectures.
+Derived KEPUB files are cached by source checksum, converter version, and
+options hash, validated before publication, and linked to their source EPUB.
+
+See [Kobo and platform features](docs/platform-features.md) and
+[KEPUB conversion](docs/kepub.md).
+
+## Backups, upgrades, and rollback
+
+BookFlow can create manual and scheduled backups containing a consistent SQLite
+snapshot, configuration files, and a checksum manifest. Set
+`BACKUP_ENCRYPTION_KEY` to encrypt backup archives with AES-GCM.
+
+Before upgrading:
+
+1. Create and verify a backup.
+2. Record the currently deployed image digest.
+3. Pull the reviewed new version or digest.
+4. Start BookFlow and verify health, login, library access, and one acquisition
+   path.
+
+Never run an older image against a database migrated by a newer version.
+Restore the matching pre-upgrade `/config` backup before rolling back.
+
+See [deployment operations](docs/deployment.md) and
+[database migrations](docs/dev/database-migrations.md).
+
+## Health and observability
+
+- Liveness: `GET /api/health`
+- Readiness and maintenance state are exposed separately to prevent a partially
+  initialized instance from being treated as ready.
+- Structured logs redact credential-shaped values and bearer/query secrets.
+- Administrative operations expose bounded metrics, migration state, backup
+  status, and durable-job health.
+
+Container logs remain available through:
+
+```bash
+docker logs bookflow
 ```
-
-## Logging
-
-Logs are available via:
-- `docker logs <container-name>`
-- `/var/log/bookflow/` inside the container (when `ENABLE_LOGGING=true`)
-
-Log level is configurable via Settings or `LOG_LEVEL` environment variable.
 
 ## Development
 
+Requirements:
+
+- Python 3.14
+- Node.js 24
+- `uv`
+- Docker with Buildx for image verification
+
 ```bash
-# Quality checks
-make checks              # Run ALL static analysis (frontend + Python)
-make python-checks       # Run Ruff, BasedPyright, and Vulture
-make install-python-dev  # Sync Python runtime + dev tools with uv
+# Python environment
+uv sync --locked --extra browser
 
-# Frontend development
-make install     # Install dependencies
-make dev         # Start Vite dev server (localhost:5173)
-make build       # Production build
-make frontend-typecheck  # TypeScript checks
+# Backend quality and tests
+make python-checks
+make python-test
 
-# Backend (Docker)
-make up          # Start backend via docker-compose.dev.yml
-make down        # Stop services
-make refresh     # Rebuild and restart
-make restart     # Restart container
+# Frontend
+cd src/frontend
+npm ci
+npm run typecheck
+npm run lint
+npm run format:check
+npm run test:unit
+npm run build
 ```
 
-The frontend dev server proxies to the backend on port 8084.
+Local development commands and demo data are documented in
+[AGENTS.md](AGENTS.md). The full documentation index is available at
+[docs/index.md](docs/index.md).
+
+## Releases
+
+Pushing a semantic version tag such as `v1.0.0` runs the Docker publication
+workflow. It:
+
+- builds the full and lite targets;
+- publishes AMD64 and ARM64 manifests to GHCR;
+- generates SBOM and provenance attestations;
+- publishes version, `latest`, and commit-SHA tags.
+
+The Windows Kobo patcher has its own tagged-release workflow with checksums and
+an SPDX SBOM. Authenticode signing is enabled when the required repository
+secrets are configured.
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+BookFlow is distributed under the [MIT License](LICENSE).
 
-## ⚠️ Disclaimer
+## Responsible use
 
-BookFlow is a search interface that displays results from external metadata providers and sources. It does not host, store, or distribute any content. The developers are not responsible for how the tool is used or what is accessed through it.
-
-Users are solely responsible for:
-- Ensuring they have the legal right to download any material they access
-- Complying with copyright laws and intellectual property rights in their jurisdiction
-- Understanding and accepting the terms of any sources they configure
-
-Use of this tool is entirely at your own risk.
+BookFlow does not provide hosted content. It connects only to sources and
+services configured by the operator. You are responsible for complying with
+the laws, licenses, provider terms, and access rights that apply in your
+jurisdiction.
 
 ## Support
 
-For issues or questions, please [file an issue](https://github.com/muneebabbas/bookflow/issues) on GitHub.
+Use [GitHub Issues](https://github.com/Timminater/BookFlow/issues) for bug
+reports and reproducible technical problems.
+
+## Acknowledgement
+
+BookFlow was originally based on the open-source
+[Shelfmark](https://github.com/calibrain/shelfmark) project. BookFlow is now
+developed and released as its own project.

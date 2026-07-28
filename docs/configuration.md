@@ -42,7 +42,7 @@ services:
 
 Notes:
 - Set `BOOKFLOW_IMAGE` in a local, non-versioned `.env` file to a full digest,
-  for example `ghcr.io/muneebabbas/bookflow@sha256:<published-release-digest>`.
+  for example `ghcr.io/timminater/bookflow@sha256:<published-release-digest>`.
   Do not use a floating `latest` tag for a deployment.
 - Point `/books` to your library ingest folder (Calibre-Web, Booklore, etc.) for automatic import.
 - If you set Books Output Mode to Booklore (API), books are uploaded via API instead of written to `/books`.

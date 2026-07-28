@@ -8,8 +8,8 @@ BookFlow is typically deployed with Docker Compose.
    with the exact immutable image digest you intend to run:
 
 ```bash
-curl -O https://raw.githubusercontent.com/muneebabbas/bookflow/main/compose/docker-compose.yml
-printf '%s\n' 'BOOKFLOW_IMAGE=ghcr.io/muneebabbas/bookflow@sha256:<published-release-digest>' > .env
+curl -O https://raw.githubusercontent.com/Timminater/BookFlow/main/compose/docker-compose.yml
+printf '%s\n' 'BOOKFLOW_IMAGE=ghcr.io/timminater/bookflow@sha256:<published-release-digest>' > .env
 ```
 
    Replace `<published-release-digest>` with the full digest of a reviewed
