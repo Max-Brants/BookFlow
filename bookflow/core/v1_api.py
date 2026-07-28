@@ -237,9 +237,7 @@ def register_v1_api(
                             "required": True,
                             "content": {
                                 "application/json": {
-                                    "schema": {
-                                        "$ref": "#/components/schemas/BulkLibraryRequest"
-                                    }
+                                    "schema": {"$ref": "#/components/schemas/BulkLibraryRequest"}
                                 }
                             },
                         },
@@ -712,11 +710,7 @@ def register_v1_api(
         book_ids: list[int] = []
         seen: set[int] = set()
         for raw_book_id in raw_book_ids:
-            if (
-                isinstance(raw_book_id, bool)
-                or not isinstance(raw_book_id, int)
-                or raw_book_id < 1
-            ):
+            if isinstance(raw_book_id, bool) or not isinstance(raw_book_id, int) or raw_book_id < 1:
                 return error(
                     "invalid_book_ids",
                     "book_ids must contain only positive integers",
@@ -726,18 +720,12 @@ def register_v1_api(
                 seen.add(raw_book_id)
                 book_ids.append(raw_book_id)
 
-        results = library_service.add_many_to_library(
-            user_id=actor.user_id, book_ids=book_ids
-        )
+        results = library_service.add_many_to_library(user_id=actor.user_id, book_ids=book_ids)
         summary = {
             "submitted": len(book_ids),
             "added": sum(item["status"] == "added" for item in results),
-            "already_in_library": sum(
-                item["status"] == "already_in_library" for item in results
-            ),
-            "failed": sum(
-                item["status"] in {"unavailable", "not_found"} for item in results
-            ),
+            "already_in_library": sum(item["status"] == "already_in_library" for item in results),
+            "failed": sum(item["status"] in {"unavailable", "not_found"} for item in results),
         }
         return jsonify({"results": results, "summary": summary})
 

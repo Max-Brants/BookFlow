@@ -143,22 +143,23 @@ def test_add_many_to_library_reports_each_result_and_grants_files(library_servic
     first = library_service.add_many_to_library(
         user_id=user["id"], book_ids=[available["id"], fileless["id"], 999_999]
     )
-    second = library_service.add_many_to_library(
-        user_id=user["id"], book_ids=[available["id"]]
-    )
+    second = library_service.add_many_to_library(user_id=user["id"], book_ids=[available["id"]])
 
     assert [item["status"] for item in first] == ["added", "unavailable", "not_found"]
     assert second[0]["status"] == "already_in_library"
     conn = sqlite3.connect(library_service._db_path)
     try:
-        assert conn.execute(
-            """
+        assert (
+            conn.execute(
+                """
             SELECT COUNT(*) FROM user_file_entitlements ufe
             JOIN book_files bf ON bf.id = ufe.file_id
             WHERE ufe.user_id = ? AND bf.book_id = ?
             """,
-            (user["id"], available["id"]),
-        ).fetchone()[0] == 1
+                (user["id"], available["id"]),
+            ).fetchone()[0]
+            == 1
+        )
     finally:
         conn.close()
 
@@ -189,9 +190,7 @@ def test_add_many_to_library_treats_equivalent_book_membership_as_idempotent(
     finally:
         conn.close()
 
-    result = library_service.add_many_to_library(
-        user_id=user["id"], book_ids=[canonical["id"]]
-    )
+    result = library_service.add_many_to_library(user_id=user["id"], book_ids=[canonical["id"]])
 
     assert result[0]["status"] == "already_in_library"
     conn = sqlite3.connect(library_service._db_path)
@@ -214,9 +213,7 @@ def test_add_many_to_library_treats_equivalent_book_membership_as_idempotent(
         conn.close()
 
 
-def test_add_many_to_library_rolls_back_on_unexpected_database_error(
-    library_service, user_db
-):
+def test_add_many_to_library_rolls_back_on_unexpected_database_error(library_service, user_db):
     user = user_db.create_user(username="rollback-reader")
     book = _insert_book(
         library_service,

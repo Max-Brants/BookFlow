@@ -116,9 +116,7 @@ def test_bulk_add_library_books_is_idempotent_and_reports_partial_results(client
         "already_in_library": 1,
         "failed": 2,
     }
-    assert [
-        (item["book_id"], item["status"]) for item in response.json["results"]
-    ] == [
+    assert [(item["book_id"], item["status"]) for item in response.json["results"]] == [
         (11, "added"),
         (10, "already_in_library"),
         (13, "unavailable"),

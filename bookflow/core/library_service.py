@@ -258,9 +258,7 @@ class LibraryService:
             finally:
                 conn.close()
 
-    def add_many_to_library(
-        self, *, user_id: int, book_ids: list[int]
-    ) -> list[dict[str, Any]]:
+    def add_many_to_library(self, *, user_id: int, book_ids: list[int]) -> list[dict[str, Any]]:
         """Add available Books in one transaction and report each outcome.
 
         Expected domain failures are isolated per Book. Unexpected database
@@ -279,9 +277,7 @@ class LibraryService:
                 for requested_book_id in normalized_book_ids:
                     equivalent_ids = equivalent_book_ids(conn, requested_book_id)
                     if not equivalent_ids:
-                        results.append(
-                            {"book_id": requested_book_id, "status": "not_found"}
-                        )
+                        results.append({"book_id": requested_book_id, "status": "not_found"})
                         continue
 
                     representative_id = canonical_book_id(conn, equivalent_ids)
@@ -297,9 +293,7 @@ class LibraryService:
                         equivalent_ids,
                     ).fetchall()
                     if not file_rows:
-                        results.append(
-                            {"book_id": requested_book_id, "status": "unavailable"}
-                        )
+                        results.append({"book_id": requested_book_id, "status": "unavailable"})
                         continue
 
                     existing_membership = conn.execute(
@@ -332,9 +326,7 @@ class LibraryService:
                             "book_id": requested_book_id,
                             "canonical_book_id": representative_id,
                             "status": (
-                                "added"
-                                if existing_membership is None
-                                else "already_in_library"
+                                "added" if existing_membership is None else "already_in_library"
                             ),
                         }
                     )

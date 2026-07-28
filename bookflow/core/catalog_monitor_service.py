@@ -198,9 +198,7 @@ class CatalogMonitorService:
             "limit": self._page(limit),
         }
 
-    def recent(
-        self, *, user_id: int | None = None, offset: int, limit: int
-    ) -> dict[str, Any]:
+    def recent(self, *, user_id: int | None = None, offset: int, limit: int) -> dict[str, Any]:
         group_key = book_group_key_sql("matching")
         ranked_group_key = book_group_key_sql("ranked")
         library_group_key = book_group_key_sql("library_book")
