@@ -563,7 +563,7 @@ class CatalogMonitorService:
             raise CatalogMonitorError("progress must be a number from 0 to 100")
         reader_update = file_id is not None or locator is not None or client_updated_at is not None
         serialized_locator: str | None = None
-        normalized_reader_updated_at: str | None = None
+        normalized_reader_updated_at = ""
         if reader_update:
             if isinstance(file_id, bool) or not isinstance(file_id, int) or file_id < 1:
                 raise CatalogMonitorError("file_id must be a positive integer")

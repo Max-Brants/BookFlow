@@ -42,7 +42,9 @@ describe('OfflineReadingLibrary', () => {
     const result = await library.cacheBook(baseInput(4));
 
     expect(result).toEqual({ evictedFileIds: [1], deferredFileIds: [] });
-    expect((await library.listContinueReading(accountId)).map((book) => book.fileId)).toEqual([4, 3, 2]);
+    expect((await library.listContinueReading(accountId)).map((book) => book.fileId)).toEqual([
+      4, 3, 2,
+    ]);
   });
 
   it('defers eviction of an open reader until it closes', async () => {
@@ -57,7 +59,9 @@ describe('OfflineReadingLibrary', () => {
     const result = await library.cacheBook(baseInput(4), protectedFiles);
 
     expect(result).toEqual({ evictedFileIds: [2], deferredFileIds: [1] });
-    expect((await library.listContinueReading(accountId)).map((book) => book.fileId)).toEqual([4, 3, 1]);
+    expect((await library.listContinueReading(accountId)).map((book) => book.fileId)).toEqual([
+      4, 3, 1,
+    ]);
   });
 
   it('queues completed progress but releases the bulky offline book', async () => {
@@ -86,7 +90,10 @@ describe('OfflineReadingLibrary', () => {
     const library = new OfflineReadingLibrary(store, fetcher, () => timestampAt(0));
     await library.cacheBook({ ...baseInput(1), etag: '"v1"' });
 
-    await expect(library.refreshBook(accountId, 1)).resolves.toEqual({ changed: false, etag: '"v1"' });
+    await expect(library.refreshBook(accountId, 1)).resolves.toEqual({
+      changed: false,
+      etag: '"v1"',
+    });
     expect(new Headers(requests[0]?.headers).get('If-None-Match')).toBe('"v1"');
   });
 });
