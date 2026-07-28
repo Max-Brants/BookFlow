@@ -82,7 +82,6 @@ export E2E_BOOKS_DIR="$STATE_DIR/books"
 export E2E_TMP_DIR="$STATE_DIR/tmp"
 export E2E_BOOKFLOW_LOG="$LOG_FILE"
 export E2E_BOOKFLOW_RESTARTS="$RESTARTS"
-export E2E_DATABASE_PATH="$STATE_DIR/config/users.db"
 
 echo "==> [$PROFILE] running suite"
 set +e

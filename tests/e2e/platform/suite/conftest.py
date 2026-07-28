@@ -8,7 +8,7 @@ invariants and therefore run across the whole configuration matrix.
 from __future__ import annotations
 
 import os
-import sqlite3
+import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -54,34 +54,57 @@ class PlatformClient:
 
     def _ensure_catalog_book(self, query: str) -> int:
         """Seed canonical metadata for a black-box release-search scenario."""
-        raw_path = os.environ.get("E2E_DATABASE_PATH")
-        if not raw_path:
-            raise RuntimeError("E2E_DATABASE_PATH is required for platform release searches")
+        seed_script = """
+import os
+import sqlite3
 
-        provider_book_id = f"platform:{query.casefold()}"
-        with sqlite3.connect(raw_path, timeout=10) as connection:
-            connection.execute(
-                """
-                INSERT INTO books (
-                    metadata_provider, provider_book_id, title, author, language,
-                    metadata_json
-                )
-                VALUES ('e2e', ?, ?, 'BookFlow E2E', 'en', '{}')
-                ON CONFLICT(metadata_provider, provider_book_id) DO UPDATE SET
-                    title = excluded.title
-                """,
-                (provider_book_id, query),
+query = os.environ["E2E_BOOK_QUERY"]
+provider_book_id = f"platform:{query.casefold()}"
+with sqlite3.connect("/config/users.db", timeout=10) as connection:
+    connection.execute(
+        '''
+        INSERT INTO books (
+            metadata_provider, provider_book_id, title, author, language,
+            metadata_json
+        )
+        VALUES ('e2e', ?, ?, 'BookFlow E2E', 'en', '{}')
+        ON CONFLICT(metadata_provider, provider_book_id) DO UPDATE SET
+            title = excluded.title
+        ''',
+        (provider_book_id, query),
+    )
+    row = connection.execute(
+        '''
+        SELECT id FROM books
+        WHERE metadata_provider = 'e2e' AND provider_book_id = ?
+        ''',
+        (provider_book_id,),
+    ).fetchone()
+if row is None:
+    raise RuntimeError(f"Could not seed E2E catalog book for {query!r}")
+print(row[0])
+"""
+        result = subprocess.run(
+            [
+                "docker",
+                "exec",
+                "-e",
+                f"E2E_BOOK_QUERY={query}",
+                "e2e-bookflow",
+                "/app/.venv/bin/python",
+                "-c",
+                seed_script,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"Could not seed E2E catalog book for {query!r}: {result.stderr.strip()}"
             )
-            row = connection.execute(
-                """
-                SELECT id FROM books
-                WHERE metadata_provider = 'e2e' AND provider_book_id = ?
-                """,
-                (provider_book_id,),
-            ).fetchone()
-        if row is None:
-            raise RuntimeError(f"Could not seed E2E catalog book for {query!r}")
-        return int(row[0])
+        return int(result.stdout.strip())
 
     def search_releases(
         self,
