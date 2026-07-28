@@ -1,6 +1,6 @@
 # Deployment Operations
 
-This fork is deployed from an image owned by the fork, pinned to an immutable
+BookFlow is deployed from a project-owned image pinned to an immutable
 digest. It intentionally does not fall back to an upstream repository or a
 floating `latest` tag.
 

@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
         ("compose/docker-compose.lite.yml", "BOOKFLOW_LITE_IMAGE"),
     ],
 )
-def test_deployment_compose_requires_a_fork_image_pin(
+def test_deployment_compose_requires_a_project_image_pin(
     relative_path: str, required_variable: str
 ) -> None:
     compose = (ROOT / relative_path).read_text(encoding="utf-8")
@@ -32,10 +32,10 @@ def test_debug_entrypoint_never_dumps_the_complete_environment() -> None:
     assert "env | sort" not in entrypoint
 
 
-def test_deployment_documentation_requires_an_immutable_fork_digest() -> None:
+def test_deployment_documentation_requires_an_immutable_project_digest() -> None:
     deployment = (ROOT / "docs/deployment.md").read_text(encoding="utf-8")
 
-    assert "BOOKFLOW_IMAGE=ghcr.io/muneebabbas/bookflow@sha256:" in deployment
+    assert "BOOKFLOW_IMAGE=ghcr.io/timminater/bookflow@sha256:" in deployment
     assert "Never run an older image against a database" in deployment
 
 

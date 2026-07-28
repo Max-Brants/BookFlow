@@ -34,7 +34,7 @@ Example `docker-compose`:
 ```yaml
 services:
   bookflow:
-    image: ${BOOKFLOW_IMAGE:?Set BOOKFLOW_IMAGE to an immutable fork image digest in .env}
+    image: ${BOOKFLOW_IMAGE:?Set BOOKFLOW_IMAGE to an immutable BookFlow image digest in .env}
     volumes:
       - /path/to/config:/config
       - /path/to/books:/books

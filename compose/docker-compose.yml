@@ -2,7 +2,7 @@ services:
   bookflow:
     # Required: set BOOKFLOW_IMAGE in .env to an immutable image digest from
     # this project, for example ghcr.io/timminater/bookflow@sha256:<digest>.
-    image: ${BOOKFLOW_IMAGE:?Set BOOKFLOW_IMAGE to an immutable fork image digest in .env}
+    image: ${BOOKFLOW_IMAGE:?Set BOOKFLOW_IMAGE to an immutable BookFlow image digest in .env}
     container_name: bookflow
     environment:
       PUID: 1000

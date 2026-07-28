@@ -4,7 +4,7 @@ BookFlow is typically deployed with Docker Compose.
 
 ## Quick Start
 
-1. Download the compose file from this fork, then create a local `.env` file
+1. Download the compose file from this project, then create a local `.env` file
    with the exact immutable image digest you intend to run:
 
 ```bash

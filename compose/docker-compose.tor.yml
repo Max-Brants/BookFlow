@@ -1,8 +1,8 @@
 # Routes all traffic through Tor - requires root startup
 services:
   bookflow-tor:
-    # Required: set BOOKFLOW_IMAGE in .env to an immutable fork image digest.
-    image: ${BOOKFLOW_IMAGE:?Set BOOKFLOW_IMAGE to an immutable fork image digest in .env}
+    # Required: set BOOKFLOW_IMAGE in .env to an immutable BookFlow image digest.
+    image: ${BOOKFLOW_IMAGE:?Set BOOKFLOW_IMAGE to an immutable BookFlow image digest in .env}
     environment:
       FLASK_PORT: 8084
       USING_TOR: true

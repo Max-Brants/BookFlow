@@ -22,7 +22,7 @@ If you run BookFlow in Docker, the script must exist inside the container. The e
 ```yaml
 services:
   bookflow:
-    image: ${BOOKFLOW_IMAGE:?Set BOOKFLOW_IMAGE to an immutable fork image digest in .env}
+    image: ${BOOKFLOW_IMAGE:?Set BOOKFLOW_IMAGE to an immutable BookFlow image digest in .env}
     volumes:
       - /path/to/your/scripts:/scripts:ro
 ```
