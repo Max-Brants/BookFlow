@@ -1,0 +1,938 @@
+"""Baseline guardrail tests for shared release download and queue endpoints."""
+
+from __future__ import annotations
+
+import importlib
+import uuid
+from unittest.mock import patch
+
+import pytest
+
+from bookflow.core.models import DownloadTask
+
+
+@pytest.fixture(scope="module")
+def main_module():
+    """Import `bookflow.main` with background startup disabled."""
+    with patch("bookflow.download.orchestrator.start"):
+        import bookflow.main as main
+
+        importlib.reload(main)
+        return main
+
+
+@pytest.fixture
+def client(main_module):
+    test_client = main_module.app.test_client()
+    test_client.environ_base["HTTP_ORIGIN"] = "http://localhost"
+    return test_client
+
+
+def _set_authenticated_session(
+    client,
+    *,
+    user_id: str = "alice",
+    db_user_id: int | None = 7,
+    is_admin: bool = False,
+) -> None:
+    with client.session_transaction() as sess:
+        sess["user_id"] = user_id
+        sess["is_admin"] = is_admin
+        if db_user_id is not None:
+            sess["db_user_id"] = db_user_id
+
+
+def _create_user(main_module, *, prefix: str, role: str = "user") -> dict:
+    username = f"{prefix}-{uuid.uuid4().hex[:8]}"
+    return main_module.user_db.create_user(username=username, role=role)
+
+
+def _add_library_book(main_module, *, user_id: int, provider_book_id: str) -> int:
+    book = main_module.library_service.upsert_book_from_metadata(
+        metadata_provider="hardcover",
+        provider_book_id=provider_book_id,
+        title="Library Book",
+        author="Library Author",
+        subtitle=None,
+        publish_year=None,
+        isbn_13=None,
+        cover_url=None,
+        series_name=None,
+        series_position=None,
+        language="en",
+        metadata_json={},
+    )
+    connection = main_module.user_db._connect()
+    try:
+        token = uuid.uuid4().hex
+        connection.execute(
+            """
+            INSERT INTO book_files (
+                book_id, storage_path, file_format, size_bytes, sha256, mime_type,
+                content_type, import_status
+            )
+            VALUES (?, ?, 'epub', 4, ?, 'application/epub+zip', 'ebook', 'imported')
+            """,
+            (book["id"], f"/books/{token}.epub", token * 2),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    main_module.library_service.add_to_library(user_id=user_id, book_id=book["id"])
+    return book["id"]
+
+
+class TestReleaseDownloadEndpointGuardrails:
+    def test_release_search_requires_library_book_id(self, main_module, client):
+        with patch.object(main_module, "get_auth_mode", return_value="none"):
+            response = client.get(
+                "/api/releases", query_string={"provider": "hardcover", "book_id": "1"}
+            )
+
+        assert response.status_code == 400
+        assert response.get_json() == {"error": "library_book_id is required"}
+
+    @pytest.mark.parametrize(
+        "legacy_params",
+        [
+            {"provider": "hardcover", "book_id": "1"},
+            {"query": "other book", "source": "direct_download"},
+            {"isbn": "9780000000000", "title": "Other Book"},
+        ],
+    )
+    def test_release_search_rejects_legacy_entry_parameters(
+        self, main_module, client, legacy_params
+    ):
+        with patch.object(main_module, "get_auth_mode", return_value="none"):
+            response = client.get(
+                "/api/releases",
+                query_string={"library_book_id": 1, **legacy_params},
+            )
+
+        assert response.status_code == 400
+        assert response.get_json() == {
+            "error": "Legacy release search parameters are not supported"
+        }
+
+    def test_request_only_user_cannot_search_releases(self, main_module, client):
+        user = _create_user(main_module, prefix="requester")
+        main_module.user_db.update_user(user["id"], library_capability="request-only")
+        _set_authenticated_session(
+            client,
+            user_id=user["username"],
+            db_user_id=user["id"],
+        )
+
+        with patch.object(main_module, "get_auth_mode", return_value="builtin"):
+            response = client.get("/api/releases", query_string={"library_book_id": "1"})
+
+        assert response.status_code == 403
+        assert response.get_json() == {"error": "Download capability required"}
+
+    def test_release_search_requires_book_in_users_library(self, main_module, client):
+        owner = _create_user(main_module, prefix="owner")
+        other_user = _create_user(main_module, prefix="other")
+        library_book_id = _add_library_book(
+            main_module, user_id=owner["id"], provider_book_id="private-book"
+        )
+        _set_authenticated_session(
+            client,
+            user_id=other_user["username"],
+            db_user_id=other_user["id"],
+        )
+
+        with patch.object(main_module, "get_auth_mode", return_value="builtin"):
+            response = client.get(
+                "/api/releases", query_string={"library_book_id": library_book_id}
+            )
+
+        assert response.status_code == 403
+        assert response.get_json() == {"error": "Book is not in your library"}
+
+    def test_non_admin_cannot_override_book_derived_release_query(self, main_module, client):
+        user = _create_user(main_module, prefix="reader")
+        library_book_id = _add_library_book(
+            main_module, user_id=user["id"], provider_book_id="book-for-query"
+        )
+        _set_authenticated_session(
+            client,
+            user_id=user["username"],
+            db_user_id=user["id"],
+        )
+
+        with patch.object(main_module, "get_auth_mode", return_value="builtin"):
+            response = client.get(
+                "/api/releases",
+                query_string={"library_book_id": library_book_id, "manual_query": "other book"},
+            )
+
+        assert response.status_code == 403
+        assert response.get_json() == {
+            "error": "Manual release queries require administrator access"
+        }
+
+    def test_empty_json_payload_returns_400(self, main_module, client):
+        with patch.object(main_module, "get_auth_mode", return_value="none"):
+            with patch.object(main_module.backend, "queue_release") as mock_queue_release:
+                resp = client.post("/api/releases/download", json={})
+
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": "No data provided"}
+        mock_queue_release.assert_not_called()
+
+    def test_missing_source_id_returns_400(self, main_module, client):
+        payload = {
+            "source": "direct_download",
+            "title": "Example",
+        }
+        with patch.object(main_module, "get_auth_mode", return_value="none"):
+            with patch.object(main_module.backend, "queue_release") as mock_queue_release:
+                resp = client.post("/api/releases/download", json=payload)
+
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": "source_id is required"}
+        mock_queue_release.assert_not_called()
+
+    def test_missing_source_returns_400(self, main_module, client):
+        payload = {
+            "source_id": "release-xyz",
+            "title": "Example",
+        }
+        with patch.object(main_module, "get_auth_mode", return_value="none"):
+            with patch.object(main_module.backend, "queue_release") as mock_queue_release:
+                resp = client.post("/api/releases/download", json=payload)
+
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": "source is required"}
+        mock_queue_release.assert_not_called()
+
+    def test_success_returns_queued_payload_and_forwards_user_context(self, main_module, client):
+        captured: dict[str, object] = {}
+
+        def fake_queue_release(release_data, priority, user_id=None, username=None):
+            captured.update(
+                {
+                    "release_data": release_data,
+                    "priority": priority,
+                    "user_id": user_id,
+                    "username": username,
+                }
+            )
+            return True, None
+
+        user = _create_user(main_module, prefix="bob")
+        _set_authenticated_session(
+            client,
+            user_id=user["username"],
+            db_user_id=user["id"],
+            is_admin=False,
+        )
+        library_book_id = _add_library_book(
+            main_module, user_id=user["id"], provider_book_id="release-xyz"
+        )
+        payload = {
+            "source": "direct_download",
+            "source_id": "release-xyz",
+            "title": "Release Title",
+            "priority": 3,
+            "search_mode": "direct",
+            "library_book_id": library_book_id,
+        }
+
+        with patch.object(main_module, "get_auth_mode", return_value="builtin"):
+            with patch.object(main_module.backend, "queue_release", side_effect=fake_queue_release):
+                resp = client.post("/api/releases/download", json=payload)
+
+        assert resp.status_code == 200
+        assert resp.get_json() == {"status": "queued", "priority": 3}
+        assert captured["release_data"] == payload
+        assert captured["priority"] == 3
+        assert captured["user_id"] == user["id"]
+        assert captured["username"] == user["username"]
+
+    def test_missing_content_type_rejects_inferred_audiobook_format(self, main_module, client):
+        payload = {
+            "source": "prowlarr",
+            "source_id": "release-audio",
+            "title": "Audio Title [m4b]",
+            "format": "m4b",
+            "priority": 1,
+        }
+
+        with patch.object(main_module, "get_auth_mode", return_value="none"):
+            with patch.object(main_module.backend, "queue_release") as mock_queue_release:
+                resp = client.post("/api/releases/download", json=payload)
+
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": "Audiobooks are no longer supported"}
+        mock_queue_release.assert_not_called()
+
+    def test_non_json_payload_returns_400(self, main_module, client):
+        with patch.object(main_module, "get_auth_mode", return_value="none"):
+            with patch.object(main_module.backend, "queue_release") as mock_queue_release:
+                resp = client.post(
+                    "/api/releases/download",
+                    data="not-json",
+                    content_type="text/plain",
+                )
+
+        body = resp.get_json()
+        assert resp.status_code == 400
+        assert body == {"error": "No data provided"}
+        mock_queue_release.assert_not_called()
+
+    def test_admin_can_queue_release_on_behalf_of_another_user(self, main_module, client):
+        target_user = _create_user(main_module, prefix="target")
+        admin_user = _create_user(main_module, prefix="admin", role="admin")
+        captured: dict[str, object] = {}
+
+        def fake_queue_release(release_data, priority, user_id=None, username=None):
+            captured.update(
+                {
+                    "release_data": release_data,
+                    "priority": priority,
+                    "user_id": user_id,
+                    "username": username,
+                }
+            )
+            return True, None
+
+        _set_authenticated_session(
+            client,
+            user_id=admin_user["username"],
+            db_user_id=admin_user["id"],
+            is_admin=True,
+        )
+        payload = {
+            "source": "direct_download",
+            "source_id": "release-admin-on-behalf",
+            "title": "Release Title",
+            "priority": 2,
+            "on_behalf_of_user_id": target_user["id"],
+            "library_book_id": _add_library_book(
+                main_module,
+                user_id=target_user["id"],
+                provider_book_id="release-admin-on-behalf",
+            ),
+        }
+
+        with patch.object(main_module, "get_auth_mode", return_value="builtin"):
+            with patch.object(main_module.backend, "queue_release", side_effect=fake_queue_release):
+                resp = client.post("/api/releases/download", json=payload)
+
+        assert resp.status_code == 200
+        assert resp.get_json() == {"status": "queued", "priority": 2}
+        assert captured["priority"] == 2
+        assert captured["user_id"] == target_user["id"]
+        assert captured["username"] == target_user["username"]
+        assert captured["release_data"] == payload
+
+    def test_non_admin_cannot_queue_release_on_behalf_of_user(self, main_module, client):
+        target_user = _create_user(main_module, prefix="target")
+        actor_user = _create_user(main_module, prefix="actor")
+        _set_authenticated_session(
+            client,
+            user_id=actor_user["username"],
+            db_user_id=actor_user["id"],
+            is_admin=False,
+        )
+        payload = {
+            "source": "direct_download",
+            "source_id": "release-forbidden",
+            "title": "Release Title",
+            "on_behalf_of_user_id": target_user["id"],
+        }
+
+        with patch.object(main_module, "get_auth_mode", return_value="builtin"):
+            with patch.object(main_module.backend, "queue_release") as mock_queue_release:
+                resp = client.post("/api/releases/download", json=payload)
+
+        assert resp.status_code == 403
+        assert resp.get_json() == {"error": "Admin required"}
+        mock_queue_release.assert_not_called()
+
+    @pytest.mark.parametrize("raw_user_id", ["abc", "-1", "0"])
+    def test_invalid_on_behalf_user_id_returns_400_for_release_download(
+        self, main_module, client, raw_user_id
+    ):
+        admin_user = _create_user(main_module, prefix="admin", role="admin")
+        _set_authenticated_session(
+            client,
+            user_id=admin_user["username"],
+            db_user_id=admin_user["id"],
+            is_admin=True,
+        )
+        payload = {
+            "source": "direct_download",
+            "source_id": "release-invalid",
+            "title": "Release Title",
+            "on_behalf_of_user_id": raw_user_id,
+        }
+
+        with patch.object(main_module, "get_auth_mode", return_value="builtin"):
+            with patch.object(main_module.backend, "queue_release") as mock_queue_release:
+                resp = client.post("/api/releases/download", json=payload)
+
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": "Invalid on_behalf_of_user_id"}
+        mock_queue_release.assert_not_called()
+
+    def test_unknown_on_behalf_user_returns_404_for_release_download(self, main_module, client):
+        admin_user = _create_user(main_module, prefix="admin", role="admin")
+        _set_authenticated_session(
+            client,
+            user_id=admin_user["username"],
+            db_user_id=admin_user["id"],
+            is_admin=True,
+        )
+        payload = {
+            "source": "direct_download",
+            "source_id": "release-missing-user",
+            "title": "Release Title",
+            "on_behalf_of_user_id": 99999999,
+        }
+
+        with patch.object(main_module, "get_auth_mode", return_value="builtin"):
+            with patch.object(main_module.backend, "queue_release") as mock_queue_release:
+                resp = client.post("/api/releases/download", json=payload)
+
+        assert resp.status_code == 404
+        assert resp.get_json() == {"error": "User not found"}
+        mock_queue_release.assert_not_called()
+
+    def test_on_behalf_release_download_returns_503_when_user_db_unavailable(
+        self, main_module, client
+    ):
+        admin_user = _create_user(main_module, prefix="admin", role="admin")
+        _set_authenticated_session(
+            client,
+            user_id=admin_user["username"],
+            db_user_id=admin_user["id"],
+            is_admin=True,
+        )
+        payload = {
+            "source": "direct_download",
+            "source_id": "release-user-db-missing",
+            "title": "Release Title",
+            "on_behalf_of_user_id": 7,
+        }
+
+        with patch.object(main_module, "get_auth_mode", return_value="builtin"):
+            with patch.object(main_module, "user_db", None):
+                with patch.object(main_module.backend, "queue_release") as mock_queue_release:
+                    resp = client.post("/api/releases/download", json=payload)
+
+        assert resp.status_code == 503
+        assert resp.get_json() == {"error": "User database unavailable"}
+        mock_queue_release.assert_not_called()
+
+
+class TestCancelDownloadEndpointGuardrails:
+    def test_owner_can_cancel_direct_download(self, main_module, client):
+        user = _create_user(main_module, prefix="reader")
+        _set_authenticated_session(
+            client,
+            user_id=user["username"],
+            db_user_id=user["id"],
+            is_admin=False,
+        )
+        task = DownloadTask(
+            task_id="direct-task-1",
+            source="direct_download",
+            title="Direct Task",
+            user_id=user["id"],
+            username=user["username"],
+        )
+
+        with patch.object(main_module, "get_auth_mode", return_value="builtin"):
+            with patch.object(main_module.backend.book_queue, "get_task", return_value=task):
+                with patch.object(
+                    main_module.backend, "cancel_download", return_value=True
+                ) as mock_cancel:
+                    resp = client.delete("/api/download/direct-task-1/cancel")
+
+        assert resp.status_code == 200
+        assert resp.get_json() == {"status": "cancelled", "book_id": "direct-task-1"}
+        mock_cancel.assert_called_once_with("direct-task-1")
+
+    def test_non_owner_cannot_cancel_download(self, main_module, client):
+        owner = _create_user(main_module, prefix="owner")
+        actor = _create_user(main_module, prefix="actor")
+        _set_authenticated_session(
+            client,
+            user_id=actor["username"],
+            db_user_id=actor["id"],
+            is_admin=False,
+        )
+        task = DownloadTask(
+            task_id="owned-task-1",
+            source="direct_download",
+            title="Owned Task",
+            user_id=owner["id"],
+            username=owner["username"],
+        )
+
+        with patch.object(main_module, "get_auth_mode", return_value="builtin"):
+            with patch.object(main_module.backend.book_queue, "get_task", return_value=task):
+                with patch.object(
+                    main_module.backend, "cancel_download", return_value=True
+                ) as mock_cancel:
+                    resp = client.delete("/api/download/owned-task-1/cancel")
+
+        assert resp.status_code == 403
+        assert resp.get_json()["code"] == "download_not_owned"
+        mock_cancel.assert_not_called()
+
+    def test_admin_can_cancel_another_users_download(self, main_module, client):
+        admin = _create_user(main_module, prefix="admin", role="admin")
+        requester = _create_user(main_module, prefix="requester")
+        _set_authenticated_session(
+            client,
+            user_id=admin["username"],
+            db_user_id=admin["id"],
+            is_admin=True,
+        )
+        task = DownloadTask(
+            task_id="admin-cancel-task-1",
+            source="direct_download",
+            title="Admin Cancel Book",
+            user_id=requester["id"],
+            username=requester["username"],
+        )
+
+        with patch.object(main_module, "get_auth_mode", return_value="builtin"):
+            with patch.object(main_module.backend.book_queue, "get_task", return_value=task):
+                with patch.object(
+                    main_module.backend, "cancel_download", return_value=True
+                ) as mock_cancel:
+                    resp = client.delete("/api/download/admin-cancel-task-1/cancel")
+
+        assert resp.status_code == 200
+        assert resp.get_json() == {"status": "cancelled", "book_id": "admin-cancel-task-1"}
+        mock_cancel.assert_called_once_with("admin-cancel-task-1")
+
+
+class TestRetryDownloadEndpointGuardrails:
+    def test_retry_returns_404_when_task_missing(self, main_module, client):
+        user = _create_user(main_module, prefix="reader")
+        _set_authenticated_session(
+            client,
+            user_id=user["username"],
+            db_user_id=user["id"],
+            is_admin=False,
+        )
+
+        with patch.object(main_module, "get_auth_mode", return_value="builtin"):
+            with patch.object(main_module.backend.book_queue, "get_task", return_value=None):
+                with patch.object(main_module.backend, "retry_download") as mock_retry:
+                    resp = client.post("/api/download/missing-task/retry")
+
+        assert resp.status_code == 404
+        assert resp.get_json() == {"error": "Download not found"}
+        mock_retry.assert_not_called()
+
+    def test_owner_can_retry_direct_download(self, main_module, client):
+        user = _create_user(main_module, prefix="reader")
+        _set_authenticated_session(
+            client,
+            user_id=user["username"],
+            db_user_id=user["id"],
+            is_admin=False,
+        )
+        task = DownloadTask(
+            task_id="direct-task-retry-1",
+            source="direct_download",
+            title="Direct Task",
+            user_id=user["id"],
+            username=user["username"],
+        )
+
+        with patch.object(main_module, "get_auth_mode", return_value="builtin"):
+            with patch.object(main_module.backend.book_queue, "get_task", return_value=task):
+                with patch.object(
+                    main_module.backend, "retry_download", return_value=(True, None)
+                ) as mock_retry:
+                    resp = client.post("/api/download/direct-task-retry-1/retry")
+
+        assert resp.status_code == 200
+        assert resp.get_json() == {"status": "queued", "book_id": "direct-task-retry-1"}
+        mock_retry.assert_called_once_with("direct-task-retry-1")
+
+    def test_owner_can_retry_persisted_direct_download_when_live_task_is_missing(
+        self, main_module, client
+    ):
+        user = _create_user(main_module, prefix="reader")
+        _set_authenticated_session(
+            client,
+            user_id=user["username"],
+            db_user_id=user["id"],
+            is_admin=False,
+        )
+
+        retry_payload = {
+            "task_id": "persisted-direct-retry-1",
+            "source": "direct_download",
+            "title": "Persisted Direct Task",
+            "user_id": user["id"],
+            "username": user["username"],
+            "search_mode": "direct",
+        }
+        main_module.download_history_service.record_download(
+            task_id="persisted-direct-retry-1",
+            user_id=user["id"],
+            username=user["username"],
+            request_id=None,
+            source="direct_download",
+            source_display_name="Direct Download",
+            title="Persisted Direct Task",
+            author="Direct Author",
+            file_format="epub",
+            size="1 MB",
+            preview=None,
+            content_type="ebook",
+            origin="direct",
+            retry_payload=retry_payload,
+        )
+
+        with patch.object(main_module, "get_auth_mode", return_value="builtin"):
+            with patch.object(main_module.backend.book_queue, "get_task", return_value=None):
+                with patch.object(
+                    main_module.backend,
+                    "retry_persisted_download",
+                    return_value=(True, None),
+                ) as mock_retry:
+                    resp = client.post("/api/download/persisted-direct-retry-1/retry")
+
+        assert resp.status_code == 200
+        assert resp.get_json() == {"status": "queued", "book_id": "persisted-direct-retry-1"}
+        assert mock_retry.call_args.args[0] == retry_payload
+        assert mock_retry.call_args.kwargs["final_status"] == "active"
+
+    def test_non_owner_cannot_retry_download(self, main_module, client):
+        owner = _create_user(main_module, prefix="owner")
+        actor = _create_user(main_module, prefix="actor")
+        _set_authenticated_session(
+            client,
+            user_id=actor["username"],
+            db_user_id=actor["id"],
+            is_admin=False,
+        )
+        task = DownloadTask(
+            task_id="owned-task-retry-1",
+            source="direct_download",
+            title="Owned Task",
+            user_id=owner["id"],
+            username=owner["username"],
+        )
+
+        with patch.object(main_module, "get_auth_mode", return_value="builtin"):
+            with patch.object(main_module.backend.book_queue, "get_task", return_value=task):
+                with patch.object(
+                    main_module.backend, "retry_download", return_value=(True, None)
+                ) as mock_retry:
+                    resp = client.post("/api/download/owned-task-retry-1/retry")
+
+        assert resp.status_code == 403
+        assert resp.get_json()["code"] == "download_not_owned"
+        mock_retry.assert_not_called()
+
+    def test_retry_returns_409_for_non_retryable_state(self, main_module, client):
+        user = _create_user(main_module, prefix="reader")
+        _set_authenticated_session(
+            client,
+            user_id=user["username"],
+            db_user_id=user["id"],
+            is_admin=False,
+        )
+        task = DownloadTask(
+            task_id="direct-task-retry-409",
+            source="direct_download",
+            title="Direct Task",
+            user_id=user["id"],
+            username=user["username"],
+        )
+
+        with patch.object(main_module, "get_auth_mode", return_value="builtin"):
+            with patch.object(main_module.backend.book_queue, "get_task", return_value=task):
+                with patch.object(
+                    main_module.backend,
+                    "retry_download",
+                    return_value=(False, "Download is not in an error state"),
+                ) as mock_retry:
+                    resp = client.post("/api/download/direct-task-retry-409/retry")
+
+        assert resp.status_code == 409
+        assert resp.get_json() == {"error": "Download is not in an error state"}
+        mock_retry.assert_called_once_with("direct-task-retry-409")
+
+
+class TestStatusEndpointGuardrails:
+    def test_no_auth_allows_without_session_and_returns_status(self, main_module, client):
+        observed: dict[str, object] = {}
+        expected_status = {
+            "queued": {"book-1": {"title": "One"}},
+            "downloading": {},
+            "completed": {},
+            "failed": {},
+            "cancelled": {},
+        }
+
+        def fake_queue_status(user_id=None):
+            observed["user_id"] = user_id
+            return expected_status
+
+        with patch.object(main_module, "get_auth_mode", return_value="none"):
+            with patch.object(main_module.backend, "queue_status", side_effect=fake_queue_status):
+                resp = client.get("/api/status")
+
+        assert resp.status_code == 200
+        assert resp.get_json() == expected_status
+        assert observed["user_id"] is None
+
+    def test_auth_enabled_without_session_returns_401(self, main_module, client):
+        with patch.object(main_module, "get_auth_mode", return_value="builtin"):
+            resp = client.get("/api/status")
+
+        assert resp.status_code == 401
+        assert resp.get_json() == {"error": "Unauthorized"}
+
+    def test_non_admin_status_is_scoped_to_db_user(self, main_module, client):
+        observed: dict[str, object] = {}
+
+        def fake_queue_status(user_id=None):
+            observed["user_id"] = user_id
+            return {"queued": {}, "downloading": {}, "completed": {}, "failed": {}, "cancelled": {}}
+
+        _set_authenticated_session(
+            client,
+            user_id="reader",
+            db_user_id=55,
+            is_admin=False,
+        )
+        with patch.object(main_module, "get_auth_mode", return_value="builtin"):
+            with patch.object(main_module.backend, "queue_status", side_effect=fake_queue_status):
+                resp = client.get("/api/status")
+
+        assert resp.status_code == 200
+        assert observed["user_id"] == 55
+
+    def test_admin_status_is_unscoped(self, main_module, client):
+        observed: dict[str, object] = {}
+
+        def fake_queue_status(user_id=None):
+            observed["user_id"] = user_id
+            return {"queued": {}, "downloading": {}, "completed": {}, "failed": {}, "cancelled": {}}
+
+        _set_authenticated_session(
+            client,
+            user_id="admin",
+            db_user_id=1,
+            is_admin=True,
+        )
+        with patch.object(main_module, "get_auth_mode", return_value="builtin"):
+            with patch.object(main_module.backend, "queue_status", side_effect=fake_queue_status):
+                resp = client.get("/api/status")
+
+        assert resp.status_code == 200
+        assert observed["user_id"] is None
+
+
+class TestQueueManagementEndpointGuardrails:
+    def test_non_owner_cannot_set_priority(self, main_module, client):
+        owner = _create_user(main_module, prefix="owner")
+        actor = _create_user(main_module, prefix="actor")
+        _set_authenticated_session(
+            client,
+            user_id=actor["username"],
+            db_user_id=actor["id"],
+            is_admin=False,
+        )
+        task = DownloadTask(
+            task_id="owned-priority-1",
+            source="direct_download",
+            title="Owned Task",
+            user_id=owner["id"],
+            username=owner["username"],
+        )
+
+        with patch.object(main_module, "get_auth_mode", return_value="builtin"):
+            with patch.object(main_module.backend.book_queue, "get_task", return_value=task):
+                with patch.object(main_module.backend, "set_book_priority") as mock_set_priority:
+                    resp = client.put("/api/queue/owned-priority-1/priority", json={"priority": 1})
+
+        assert resp.status_code == 403
+        assert resp.get_json()["code"] == "download_not_owned"
+        mock_set_priority.assert_not_called()
+
+    def test_owner_can_set_priority(self, main_module, client):
+        user = _create_user(main_module, prefix="reader")
+        _set_authenticated_session(
+            client,
+            user_id=user["username"],
+            db_user_id=user["id"],
+            is_admin=False,
+        )
+        task = DownloadTask(
+            task_id="reader-priority-1",
+            source="direct_download",
+            title="Reader Task",
+            user_id=user["id"],
+            username=user["username"],
+        )
+
+        with patch.object(main_module, "get_auth_mode", return_value="builtin"):
+            with patch.object(main_module.backend.book_queue, "get_task", return_value=task):
+                with patch.object(
+                    main_module.backend, "set_book_priority", return_value=True
+                ) as mock_set_priority:
+                    resp = client.put("/api/queue/reader-priority-1/priority", json={"priority": 2})
+
+        assert resp.status_code == 200
+        assert resp.get_json() == {
+            "status": "updated",
+            "book_id": "reader-priority-1",
+            "priority": 2,
+        }
+        mock_set_priority.assert_called_once_with("reader-priority-1", 2)
+
+    def test_non_owner_cannot_reorder_other_users_task(self, main_module, client):
+        owner = _create_user(main_module, prefix="owner")
+        actor = _create_user(main_module, prefix="actor")
+        _set_authenticated_session(
+            client,
+            user_id=actor["username"],
+            db_user_id=actor["id"],
+            is_admin=False,
+        )
+        owned_task = DownloadTask(
+            task_id="actor-reorder-1",
+            source="direct_download",
+            title="Actor Task",
+            user_id=actor["id"],
+            username=actor["username"],
+        )
+        other_task = DownloadTask(
+            task_id="owner-reorder-1",
+            source="direct_download",
+            title="Owner Task",
+            user_id=owner["id"],
+            username=owner["username"],
+        )
+
+        def fake_get_task(task_id):
+            return {
+                "actor-reorder-1": owned_task,
+                "owner-reorder-1": other_task,
+            }.get(task_id)
+
+        with patch.object(main_module, "get_auth_mode", return_value="builtin"):
+            with patch.object(
+                main_module.backend.book_queue, "get_task", side_effect=fake_get_task
+            ):
+                with patch.object(main_module.backend, "reorder_queue") as mock_reorder:
+                    resp = client.post(
+                        "/api/queue/reorder",
+                        json={
+                            "book_priorities": {
+                                "actor-reorder-1": 1,
+                                "owner-reorder-1": 0,
+                            }
+                        },
+                    )
+
+        assert resp.status_code == 403
+        assert resp.get_json()["code"] == "download_not_owned"
+        mock_reorder.assert_not_called()
+
+    def test_non_admin_queue_order_is_scoped_to_owned_tasks(self, main_module, client):
+        user = _create_user(main_module, prefix="reader")
+        other = _create_user(main_module, prefix="other")
+        _set_authenticated_session(
+            client,
+            user_id=user["username"],
+            db_user_id=user["id"],
+            is_admin=False,
+        )
+        user_task = DownloadTask(
+            task_id="reader-order-1",
+            source="direct_download",
+            title="Reader Task",
+            user_id=user["id"],
+            username=user["username"],
+        )
+        other_task = DownloadTask(
+            task_id="other-order-1",
+            source="direct_download",
+            title="Other Task",
+            user_id=other["id"],
+            username=other["username"],
+        )
+
+        def fake_get_task(task_id):
+            return {
+                "reader-order-1": user_task,
+                "other-order-1": other_task,
+            }.get(task_id)
+
+        with patch.object(main_module, "get_auth_mode", return_value="builtin"):
+            with patch.object(
+                main_module.backend,
+                "get_queue_order",
+                return_value=[
+                    {"id": "reader-order-1", "title": "Reader Task", "priority": 0},
+                    {"id": "other-order-1", "title": "Other Task", "priority": 1},
+                ],
+            ):
+                with patch.object(
+                    main_module.backend.book_queue, "get_task", side_effect=fake_get_task
+                ):
+                    resp = client.get("/api/queue/order")
+
+        assert resp.status_code == 200
+        assert resp.get_json()["queue"] == [
+            {"id": "reader-order-1", "title": "Reader Task", "priority": 0}
+        ]
+
+    def test_non_admin_active_downloads_are_scoped_to_owned_tasks(self, main_module, client):
+        user = _create_user(main_module, prefix="reader")
+        other = _create_user(main_module, prefix="other")
+        _set_authenticated_session(
+            client,
+            user_id=user["username"],
+            db_user_id=user["id"],
+            is_admin=False,
+        )
+        user_task = DownloadTask(
+            task_id="reader-active-1",
+            source="direct_download",
+            title="Reader Task",
+            user_id=user["id"],
+            username=user["username"],
+        )
+        other_task = DownloadTask(
+            task_id="other-active-1",
+            source="direct_download",
+            title="Other Task",
+            user_id=other["id"],
+            username=other["username"],
+        )
+
+        def fake_get_task(task_id):
+            return {
+                "reader-active-1": user_task,
+                "other-active-1": other_task,
+            }.get(task_id)
+
+        with patch.object(main_module, "get_auth_mode", return_value="builtin"):
+            with patch.object(
+                main_module.backend,
+                "get_active_downloads",
+                return_value=["reader-active-1", "other-active-1"],
+            ):
+                with patch.object(
+                    main_module.backend.book_queue, "get_task", side_effect=fake_get_task
+                ):
+                    resp = client.get("/api/downloads/active")
+
+        assert resp.status_code == 200
+        assert resp.get_json() == {"active_downloads": ["reader-active-1"]}

@@ -1,0 +1,75 @@
+import { useEffect, useEffectEvent, useRef } from 'react';
+
+import type { StatusData } from '../../types';
+
+interface UseStatusChangeNotificationsOptions {
+  currentStatus: StatusData;
+  showToast: (message: string, type: 'info' | 'success' | 'error') => void;
+  bookToReleaseMap: Record<string, string[]>;
+  markBookCompleted: (bookId: string) => void;
+}
+
+export const useStatusChangeNotifications = ({
+  currentStatus,
+  showToast,
+  bookToReleaseMap,
+  markBookCompleted,
+}: UseStatusChangeNotificationsOptions): void => {
+  const prevStatusRef = useRef<StatusData>({});
+  const handleStatusTransition = useEffectEvent(
+    (prevStatus: StatusData, nextStatus: StatusData) => {
+      const prevQueued = prevStatus.queued || {};
+      const currQueued = nextStatus.queued || {};
+      Object.keys(currQueued).forEach((bookId) => {
+        if (!prevQueued[bookId]) {
+          const book = currQueued[bookId];
+          showToast(`${book.title || 'Book'} added to queue`, 'info');
+        }
+      });
+      const prevDownloading = prevStatus.downloading || {};
+      const currDownloading = nextStatus.downloading || {};
+      Object.keys(currDownloading).forEach((bookId) => {
+        if (!prevDownloading[bookId]) {
+          const book = currDownloading[bookId];
+          showToast(`${book.title || 'Book'} started downloading`, 'info');
+        }
+      });
+
+      const prevComplete = prevStatus.complete || {};
+      const currComplete = nextStatus.complete || {};
+      Object.keys(currComplete).forEach((bookId) => {
+        if (!prevComplete[bookId]) {
+          const book = currComplete[bookId];
+          showToast(`${book.title || 'Book'} completed`, 'success');
+
+          Object.entries(bookToReleaseMap).forEach(([metadataBookId, releaseIds]) => {
+            if (releaseIds.includes(bookId)) {
+              markBookCompleted(metadataBookId);
+            }
+          });
+        }
+      });
+
+      const prevError = prevStatus.error || {};
+      const currError = nextStatus.error || {};
+      Object.keys(currError).forEach((bookId) => {
+        if (!prevError[bookId]) {
+          const book = currError[bookId];
+          const errorMsg = book.status_message || 'Download failed';
+          showToast(`${book.title || 'Book'}: ${errorMsg}`, 'error');
+        }
+      });
+    },
+  );
+
+  useEffect(() => {
+    const prevStatus = prevStatusRef.current;
+    if (!prevStatus || Object.keys(prevStatus).length === 0) {
+      prevStatusRef.current = currentStatus;
+      return;
+    }
+
+    handleStatusTransition(prevStatus, currentStatus);
+    prevStatusRef.current = currentStatus;
+  }, [currentStatus]);
+};

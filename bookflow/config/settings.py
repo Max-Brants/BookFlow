@@ -1,0 +1,1340 @@
+"""Core settings registration and derived configuration values."""
+
+import json
+from pathlib import Path
+from typing import Any
+
+from bookflow.config import env
+from bookflow.config.download_settings_handlers import (
+    check_books_destination,
+)
+from bookflow.core.logger import setup_logger
+from bookflow.core.settings_registry import (
+    ActionButton,
+    CheckboxField,
+    CustomComponentField,
+    HeadingField,
+    MultiSelectField,
+    NumberField,
+    OrderableListField,
+    PasswordField,
+    SelectField,
+    SettingsField,
+    TableField,
+    TagListField,
+    TextField,
+    load_config_file,
+    register_group,
+    register_on_save,
+    register_settings,
+)
+
+_DOWNLOAD_CLIENT_COMPLETED_PATH_TIMEOUT_DEFAULT = 60
+_DOWNLOAD_CLIENT_COMPLETED_PATH_TIMEOUT_MAX = 3600
+
+
+def _on_save_advanced(values: dict[str, Any]) -> dict[str, Any]:
+    """Validate advanced settings before persisting."""
+    from bookflow.core.logger import setup_logger
+
+    logger = setup_logger(__name__)
+
+    timeout_key = "DOWNLOAD_CLIENT_COMPLETED_PATH_TIMEOUT"
+    if timeout_key in values:
+        raw_timeout = values.get(timeout_key)
+        if isinstance(raw_timeout, bool):
+            return {
+                "error": True,
+                "message": "Completed Path Wait must be a number of seconds",
+                "values": values,
+            }
+        if raw_timeout is None:
+            return {
+                "error": True,
+                "message": "Completed Path Wait must be a number of seconds",
+                "values": values,
+            }
+        try:
+            timeout_seconds = int(raw_timeout)
+        except TypeError, ValueError:
+            return {
+                "error": True,
+                "message": "Completed Path Wait must be a number of seconds",
+                "values": values,
+            }
+        if timeout_seconds < 0 or timeout_seconds > _DOWNLOAD_CLIENT_COMPLETED_PATH_TIMEOUT_MAX:
+            return {
+                "error": True,
+                "message": (
+                    "Completed Path Wait must be between 0 and "
+                    f"{_DOWNLOAD_CLIENT_COMPLETED_PATH_TIMEOUT_MAX} seconds"
+                ),
+                "values": values,
+            }
+        values[timeout_key] = timeout_seconds
+
+    mappings = values.get("PROWLARR_REMOTE_PATH_MAPPINGS")
+    if mappings is None:
+        return {"error": False, "values": values}
+
+    if not isinstance(mappings, list):
+        return {
+            "error": True,
+            "message": "Remote path mappings must be a list",
+            "values": values,
+        }
+
+    logger.debug("Processing %d remote path mapping entries", len(mappings))
+
+    cleaned = []
+    for i, entry in enumerate(mappings):
+        if not isinstance(entry, dict):
+            logger.debug("Skipping entry %d: not a dict", i)
+            continue
+
+        host = str(entry.get("host", "") or "").strip().lower()
+        remote_path = str(entry.get("remotePath", "") or "").strip()
+        local_path = str(entry.get("localPath", "") or "").strip()
+
+        if not host or not remote_path or not local_path:
+            logger.debug(
+                "Skipping entry %d: missing field(s) - host=%s, remotePath=%s, localPath=%s",
+                i,
+                host,
+                remote_path,
+                local_path,
+            )
+            continue
+
+        if not local_path.startswith("/"):
+            return {
+                "error": True,
+                "message": f"Local Path must be an absolute path (got: {local_path})",
+                "values": values,
+            }
+
+        cleaned.append({"host": host, "remotePath": remote_path, "localPath": local_path})
+
+    logger.info("Saved %d remote path mapping(s)", len(cleaned))
+    if cleaned:
+        for m in cleaned:
+            logger.debug(
+                "  Mapping: %s -> %s (client: %s)", m["remotePath"], m["localPath"], m["host"]
+            )
+
+    values["PROWLARR_REMOTE_PATH_MAPPINGS"] = cleaned
+    return {"error": False, "values": values}
+
+
+def _on_save_bestseller(values: dict[str, Any]) -> dict[str, Any]:
+    """Keep the low-traffic Bestseller 60 polling interval within safe bounds."""
+    key = "BESTSELLER_CHECK_INTERVAL_HOURS"
+    if key not in values:
+        return {"error": False, "values": values}
+    raw_value = values[key]
+    if isinstance(raw_value, bool):
+        return {
+            "error": True,
+            "message": "Controle-interval moet een aantal uren zijn",
+            "values": values,
+        }
+    try:
+        interval = int(raw_value)
+    except TypeError, ValueError:
+        return {
+            "error": True,
+            "message": "Controle-interval moet een aantal uren zijn",
+            "values": values,
+        }
+    if not 1 <= interval <= 168:
+        return {
+            "error": True,
+            "message": "Controle-interval moet tussen 1 en 168 uur liggen",
+            "values": values,
+        }
+    values[key] = interval
+    return {"error": False, "values": values}
+
+
+logger = setup_logger(__name__)
+
+# Log bootstrap configuration values at DEBUG level
+logger.debug("Bootstrap configuration:")
+for key in ["CONFIG_DIR", "LOG_DIR", "TMP_DIR", "INGEST_DIR", "DEBUG", "DOCKERMODE"]:
+    if hasattr(env, key):
+        logger.debug("  %s: %s", key, getattr(env, key))
+
+# Load supported book languages from data file
+# Path is relative to the package root, not this file
+_DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
+with (_DATA_DIR / "book-languages.json").open() as file:
+    _SUPPORTED_BOOK_LANGUAGE = json.load(file)
+
+# Directory settings
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+logger.debug("BASE_DIR: %s", BASE_DIR)
+if env.ENABLE_LOGGING:
+    env.LOG_DIR.mkdir(exist_ok=True)
+
+# Create staging directory (destination is created by orchestrator using config value)
+env.TMP_DIR.mkdir(exist_ok=True)
+
+# DNS placeholders - actual values set by network.init() from config/ENV
+CUSTOM_DNS: list[str] = []
+DOH_SERVER: str = ""
+
+# Recording directory for debugging internal cloudflare bypasser
+RECORDING_DIR = env.LOG_DIR / "recording"
+
+
+def _log_external_bypasser_warning() -> None:
+    """Log warning about external bypasser DNS limitations (called after config is available)."""
+    from bookflow.core.config import config
+
+    if config.get("USING_EXTERNAL_BYPASSER", False) and config.get("USE_CF_BYPASS", True):
+        logger.warning(
+            "Using external bypasser (FlareSolverr). Note: FlareSolverr uses its own DNS resolution, "
+            "not this application's custom DNS settings. If you experience DNS-related blocks, "
+            "configure DNS at the Docker/system level for your FlareSolverr container, "
+            "or consider using the internal bypasser which integrates with the app's DNS system."
+        )
+
+
+register_group("direct_download", "Direct Download", icon="download", order=20)
+
+register_group(
+    "metadata_providers",
+    "Metadata Providers",
+    icon="book",
+    order=12,  # Between Network (10) and Advanced (15)
+)
+
+
+@register_settings("bestseller", "Trending-boeken", icon="trending-up", order=14)
+def bestseller_settings() -> list[SettingsField]:
+    """Administrative controls for the Dutch Bestseller 60 integration."""
+    return [
+        CheckboxField(
+            key="BESTSELLER_ENABLED",
+            label="Trending-boeken inschakelen",
+            description="Werk de Nederlandse Bestseller 60 automatisch bij en toon deze als Trending.",
+            default=True,
+        ),
+        NumberField(
+            key="BESTSELLER_CHECK_INTERVAL_HOURS",
+            label="Controle-interval (uren)",
+            description="Hoe vaak BookFlow op een nieuwe Bestseller 60-week controleert.",
+            default=24,
+            min_value=1,
+            max_value=168,
+            show_when={"field": "BESTSELLER_ENABLED", "value": True},
+        ),
+    ]
+
+
+register_on_save("bestseller", _on_save_bestseller)
+
+
+_FORMAT_OPTIONS = [
+    {"value": "epub", "label": "EPUB"},
+    {"value": "mobi", "label": "MOBI"},
+    {"value": "azw3", "label": "AZW3"},
+    {"value": "pdf", "label": "PDF"},
+    {"value": "fb2", "label": "FB2"},
+    {"value": "djvu", "label": "DJVU"},
+    {"value": "cbz", "label": "CBZ"},
+    {"value": "cbr", "label": "CBR"},
+    {"value": "txt", "label": "TXT"},
+    {"value": "rtf", "label": "RTF"},
+    {"value": "doc", "label": "DOC"},
+    {"value": "docx", "label": "DOCX"},
+    {"value": "zip", "label": "ZIP"},
+    {"value": "rar", "label": "RAR"},
+]
+
+
+def _get_metadata_provider_options() -> list[dict[str, str]]:
+    """Build metadata provider options dynamically from enabled providers only."""
+    from bookflow.metadata_providers import is_provider_enabled, list_providers
+
+    options = [
+        {"value": provider["name"], "label": provider["display_name"]}
+        for provider in list_providers()
+        if is_provider_enabled(provider["name"])
+    ]
+
+    # If no providers enabled, show a placeholder option
+    if not options:
+        options = [
+            {"value": "", "label": "No providers enabled"},
+        ]
+
+    return options
+
+
+def _get_release_source_options_for_content_type(content_type: str) -> list[dict[str, str]]:
+    """Build release source options dynamically for a specific content type."""
+    from bookflow.release_sources import list_available_sources
+
+    return [
+        {"value": source["name"], "label": source["display_name"]}
+        for source in list_available_sources()
+        if source.get("enabled", True)
+        and source.get("can_be_default", True)
+        and content_type in source.get("supported_content_types", ["ebook"])
+    ]
+
+
+def _get_book_release_source_options() -> list[dict[str, str]]:
+    """Build default release source options for book searches."""
+    return [
+        {"value": "", "label": "Use first available source"},
+        *_get_release_source_options_for_content_type("ebook"),
+    ]
+
+
+_LANGUAGE_OPTIONS = [
+    {"value": lang["code"], "label": lang["language"]} for lang in _SUPPORTED_BOOK_LANGUAGE
+]
+
+
+def _string_setting(value: object) -> str:
+    """Normalize free-form string settings used by select option builders."""
+    return value if isinstance(value, str) else str(value or "")
+
+
+def _get_aa_base_url_options() -> list[dict[str, str]]:
+    """Build AA URL options dynamically from user-supplied mirrors."""
+    from bookflow.core.config import config
+    from bookflow.core.mirrors import get_aa_mirrors
+    from bookflow.core.utils import normalize_http_url
+
+    options = [{"value": "auto", "label": "Auto (Recommended)"}]
+
+    all_mirrors = get_aa_mirrors()
+
+    configured_url = normalize_http_url(
+        _string_setting(config.get("AA_BASE_URL", "auto")),
+        default_scheme="https",
+        allow_special=("auto",),
+    )
+    if configured_url and configured_url != "auto" and configured_url not in all_mirrors:
+        all_mirrors = [configured_url, *all_mirrors]
+
+    for url in all_mirrors:
+        domain = url.replace("https://", "").replace("http://", "")
+        label = domain
+        if configured_url and url == configured_url:
+            label = f"{domain} (configured)"
+        options.append({"value": url, "label": label})
+
+    return options
+
+
+def _clear_covers_cache(current_values: dict) -> dict:
+    """Clear the cover image cache."""
+    try:
+        from bookflow.core.image_cache import get_image_cache, reset_image_cache
+
+        cache = get_image_cache()
+        count = cache.clear()
+
+        # Reset the singleton so it reinitializes with fresh state
+        reset_image_cache()
+
+    except Exception as e:
+        logger.exception("Failed to clear cover cache")
+        return {
+            "success": False,
+            "message": f"Failed to clear cache: {e!s}",
+        }
+    else:
+        return {
+            "success": True,
+            "message": f"Cleared {count} cached cover images.",
+        }
+
+
+def _clear_metadata_cache(current_values: dict) -> dict:
+    """Clear the in-memory metadata cache."""
+    try:
+        from bookflow.core.cache import get_metadata_cache
+
+        cache = get_metadata_cache()
+        stats_before = cache.stats()
+        cache.clear()
+
+        return {
+            "success": True,
+            "message": f"Cleared {stats_before['size']} cached entries.",
+        }
+    except Exception as e:
+        logger.exception("Failed to clear metadata cache")
+        return {
+            "success": False,
+            "message": f"Failed to clear cache: {e!s}",
+        }
+
+
+@register_settings("general", "General", icon="settings", order=0)
+def general_settings() -> list[SettingsField]:
+    """Core application settings."""
+    return [
+        SelectField(
+            key="DEFAULT_UI_LANGUAGE",
+            label="Default interface language",
+            description=(
+                "Language assigned to newly created users. Existing users keep "
+                "their personal language preference."
+            ),
+            options=[
+                {"value": "en", "label": "English"},
+                {"value": "nl", "label": "Nederlands"},
+            ],
+            default="en",
+            env_supported=False,
+        ),
+        HeadingField(
+            key="search_defaults_heading",
+            title="Default Search Filters",
+            description="Default filters applied to searches. Can be overridden using advanced search options.",
+        ),
+        MultiSelectField(
+            key="SUPPORTED_FORMATS",
+            label="Supported Book Formats",
+            description="Book formats to include in search results. ZIP/RAR archives are extracted automatically and book files are used if found.",
+            options=_FORMAT_OPTIONS,
+            default=["epub", "mobi", "azw3", "fb2", "djvu", "cbz", "cbr"],
+        ),
+        MultiSelectField(
+            key="BOOK_LANGUAGE",
+            label="Default Book Languages",
+            description="Default language filter for searches.",
+            options=_LANGUAGE_OPTIONS,
+            default=["en"],
+        ),
+    ]
+
+
+@register_settings("discovery", "Release Discovery", icon="search", order=1)
+def discovery_settings() -> list[SettingsField]:
+    """Configure administrator-managed Book release discovery defaults."""
+    return [
+        HeadingField(
+            key="discovery_heading",
+            title="Discovery Defaults",
+            description="Configure the metadata providers and release sources used for Book-scoped discovery.",
+        ),
+        CheckboxField(
+            key="SHOW_RELEASE_SOURCE_LINKS",
+            label="Show Release Source Links",
+            description=(
+                "Show clickable release-source links in release and details modals. "
+                "Metadata provider links stay enabled."
+            ),
+            default=True,
+        ),
+        HeadingField(
+            key="providers_heading",
+            title="Metadata Providers",
+            description="Choose the metadata providers used for Book lookup and discovery.",
+        ),
+        SelectField(
+            key="METADATA_PROVIDER",
+            label="Book Metadata Provider",
+            description="Choose which metadata provider to use for book searches.",
+            options=_get_metadata_provider_options,  # Callable - evaluated lazily to avoid circular imports
+            default="openlibrary",
+        ),
+        SelectField(
+            key="DEFAULT_RELEASE_SOURCE",
+            label="Default Book Release Source",
+            description=(
+                "The release source tab to open by default in the release modal for books. "
+                "Leave unset to use the first available source."
+            ),
+            options=_get_book_release_source_options,  # Callable - evaluated lazily to avoid circular imports
+            default="",
+        ),
+    ]
+
+
+@register_settings("network", "Network", icon="globe", order=10)
+def network_settings() -> list[SettingsField]:
+    """Network and connectivity settings."""
+    # Avoid querying the live config singleton while settings are still being
+    # registered, which can recurse back into this module during import.
+    tor_enabled = env.USING_TOR
+
+    # When Tor is enabled, DNS/proxy settings are overridden by iptables rules
+    # Tor uses iptables to force ALL traffic through Tor
+    tor_overrides_network = tor_enabled  # Only override when Tor is actually active
+
+    return [
+        SelectField(
+            key="CERTIFICATE_VALIDATION",
+            label="Certificate Validation",
+            description="Controls SSL/TLS certificate verification for outbound connections. Disable for self-signed certificates on internal services (e.g. OIDC providers, Prowlarr).",
+            options=[
+                {"value": "enabled", "label": "Enabled (Recommended)"},
+                {"value": "disabled_local", "label": "Disabled for Local Addresses"},
+                {"value": "disabled", "label": "Disabled"},
+            ],
+            default="enabled",
+        ),
+        SelectField(
+            key="CUSTOM_DNS",
+            label="DNS Provider",
+            description=(
+                "Managed by Tor when Tor routing is enabled."
+                if tor_overrides_network
+                else "DNS provider for domain resolution. 'Auto' rotates through providers on failure."
+            ),
+            options=[
+                {"value": "auto", "label": "Auto (Recommended)"},
+                {"value": "system", "label": "System"},
+                {"value": "google", "label": "Google"},
+                {"value": "cloudflare", "label": "Cloudflare"},
+                {"value": "quad9", "label": "Quad9"},
+                {"value": "opendns", "label": "OpenDNS"},
+                {"value": "manual", "label": "Manual"},
+            ],
+            default="auto",
+            disabled=tor_overrides_network,
+            disabled_reason="DNS is managed by Tor when Tor routing is enabled.",
+        ),
+        TextField(
+            key="CUSTOM_DNS_MANUAL",
+            label="Manual DNS Servers",
+            description="Comma-separated list of DNS server IP addresses (e.g., 8.8.8.8, 1.1.1.1).",
+            placeholder="8.8.8.8, 1.1.1.1",
+            disabled=tor_overrides_network,
+            disabled_reason="DNS is managed by Tor when Tor routing is enabled.",
+            show_when={"field": "CUSTOM_DNS", "value": "manual"},
+        ),
+        CheckboxField(
+            key="USE_DOH",
+            label="Use DNS over HTTPS",
+            description=(
+                "Not applicable when Tor routing is enabled."
+                if tor_overrides_network
+                else "Use encrypted DNS queries for improved reliability and privacy."
+            ),
+            default=True,
+            disabled=tor_overrides_network,
+            disabled_reason="DNS over HTTPS is not used when Tor routing is enabled.",
+            # Hide for manual and system (no DoH endpoint available for custom IPs or system DNS)
+            show_when={
+                "field": "CUSTOM_DNS",
+                "value": ["auto", "google", "cloudflare", "quad9", "opendns"],
+            },
+            # Disable for auto (always uses DoH)
+            disabled_when={
+                "field": "CUSTOM_DNS",
+                "value": "auto",
+                "reason": "Auto mode always uses DNS over HTTPS for reliable provider rotation.",
+            },
+        ),
+        CheckboxField(
+            key="USING_TOR",
+            label="Tor Routing",
+            description=(
+                "All traffic is routed through Tor. Requires container restart to change."
+                if tor_enabled
+                else "Route all traffic through Tor for enhanced privacy. Requires root startup."
+            ),
+            default=tor_enabled,  # Reflects actual state from env var
+            disabled=True,  # Tor state requires container restart
+            disabled_reason=(
+                "Tor routing is active. Set USING_TOR=false and restart to disable."
+                if tor_enabled
+                else "Set USING_TOR=true env var and restart as root."
+            ),
+        ),
+        SelectField(
+            key="PROXY_MODE",
+            label="Proxy Mode",
+            description=(
+                "Not applicable when Tor routing is enabled."
+                if tor_overrides_network
+                else "Choose proxy type. SOCKS5 handles all traffic through a single proxy."
+            ),
+            options=[
+                {"value": "none", "label": "None (Direct Connection)"},
+                {"value": "http", "label": "HTTP/HTTPS Proxy"},
+                {"value": "socks5", "label": "SOCKS5 Proxy"},
+            ],
+            default="none",
+            disabled=tor_overrides_network,
+            disabled_reason="Proxy settings are not used when Tor routing is enabled.",
+        ),
+        TextField(
+            key="HTTP_PROXY",
+            label="HTTP Proxy",
+            description="HTTP proxy URL (e.g., http://proxy:8080)",
+            placeholder="http://proxy:8080",
+            disabled=tor_overrides_network,
+            disabled_reason="Proxy settings are not used when Tor routing is enabled.",
+            show_when={"field": "PROXY_MODE", "value": "http"},
+        ),
+        TextField(
+            key="HTTPS_PROXY",
+            label="HTTPS Proxy",
+            description="HTTPS proxy URL (leave empty to use HTTP proxy for HTTPS)",
+            placeholder="http://proxy:8080",
+            disabled=tor_overrides_network,
+            disabled_reason="Proxy settings are not used when Tor routing is enabled.",
+            show_when={"field": "PROXY_MODE", "value": "http"},
+        ),
+        TextField(
+            key="SOCKS5_PROXY",
+            label="SOCKS5 Proxy",
+            description="SOCKS5 proxy URL. Supports auth: socks5://user:pass@host:port",
+            placeholder="socks5://localhost:1080",
+            disabled=tor_overrides_network,
+            disabled_reason="Proxy settings are not used when Tor routing is enabled.",
+            show_when={"field": "PROXY_MODE", "value": "socks5"},
+        ),
+        TextField(
+            key="NO_PROXY",
+            label="No Proxy",
+            description="Comma-separated hosts to bypass proxy (e.g., localhost,127.0.0.1,10.*,*.local)",
+            disabled=tor_overrides_network,
+            disabled_reason="Proxy settings are not used when Tor routing is enabled.",
+            show_when={"field": "PROXY_MODE", "value": ["http", "socks5"]},
+        ),
+    ]
+
+
+def _contains_path_separators(value: Any) -> bool:
+    return isinstance(value, str) and ("/" in value or "\\" in value)
+
+
+def _on_save_downloads(values: dict[str, Any]) -> dict[str, Any]:
+    """Validate download settings before persisting."""
+    existing = load_config_file("downloads")
+    effective: dict[str, Any] = dict(existing)
+    effective.update(values)
+
+    if effective.get("FILE_ORGANIZATION", "rename") == "rename":
+        template = effective.get("TEMPLATE_RENAME", "")
+        if _contains_path_separators(template):
+            return {
+                "error": True,
+                "message": "Books Naming Template cannot contain '/' or '\\' in Rename mode. Use Organize mode to create folders.",
+                "values": values,
+            }
+
+    return {"error": False, "values": values}
+
+
+def _naming_template_field(
+    *,
+    key: str,
+    label: str,
+    description: str,
+    default: str,
+    placeholder: str,
+    show_when: dict[str, Any] | list[dict[str, Any]],
+    universal_only: bool = False,
+) -> CustomComponentField:
+    return CustomComponentField(
+        key=f"{key.lower()}_editor",
+        label=label,
+        component="naming_template",
+        show_when=show_when,
+        universal_only=universal_only,
+        wrap_in_field_wrapper=True,
+        value_fields=[
+            TextField(
+                key=key,
+                label=label,
+                description=description,
+                default=default,
+                placeholder=placeholder,
+                show_when=show_when,
+                universal_only=universal_only,
+            )
+        ],
+    )
+
+
+@register_settings("downloads", "Downloads", icon="folder", order=5)
+def download_settings() -> list[SettingsField]:
+    """Configure download behavior and file locations."""
+    return [
+        # === BOOKS SECTION ===
+        # Visible for ALL modes (Direct + Universal)
+        HeadingField(
+            key="books_heading",
+            title="Books",
+            description="Configure where ebooks, comics, and magazines are saved.",
+        ),
+        TextField(
+            key="DESTINATION",
+            label="Destination",
+            description="Directory where completed Files are saved.",
+            default="/books",
+            required=True,
+            env_var="INGEST_DIR",  # Legacy env var name for backwards compatibility
+        ),
+        ActionButton(
+            key="test_destination",
+            label="Test Destination",
+            description="Check that BookFlow can create and write to this destination.",
+            style="primary",
+            callback=check_books_destination,
+        ),
+        SelectField(
+            key="FILE_ORGANIZATION",
+            label="File Organization",
+            description="Choose how downloaded book files are named and organized.",
+            options=[
+                {
+                    "value": "none",
+                    "label": "None",
+                    "description": "Keep original filename from source",
+                },
+                {
+                    "value": "rename",
+                    "label": "Rename Only",
+                    "description": "Rename single-file downloads; multi-file keeps original names.",
+                },
+                {
+                    "value": "organize",
+                    "label": "Rename and Organize",
+                    "description": "Create folders and rename files using a template. Do not use with ingest folders.",
+                },
+            ],
+            default="rename",
+        ),
+        # Rename mode template - filename only
+        _naming_template_field(
+            key="TEMPLATE_RENAME",
+            label="Naming Template",
+            description=(
+                "Variables: {Author}, {Title}, {Year}, {User}, {OriginalName} "
+                "(source filename without extension). Universal adds: {Series}, "
+                "{SeriesPosition}, {Subtitle}, {PrimaryTitle}. Use arbitrary prefix/suffix: "
+                "{Vol. SeriesPosition - } outputs 'Vol. 2 - ' when set, nothing when empty. "
+                "Rename templates are filename-only (no '/' or '\\'); use Organize for folders. "
+                "Applies to single-file downloads."
+            ),
+            default="{Author} - {Title} ({Year})",
+            placeholder="{Author} - {Title} ({Year})",
+            show_when={"field": "FILE_ORGANIZATION", "value": "rename"},
+        ),
+        # Organize mode template - folders allowed
+        _naming_template_field(
+            key="TEMPLATE_ORGANIZE",
+            label="Path Template",
+            description=(
+                "Use / to create folders. Variables: {Author}, {Title}, {Year}, {User}, "
+                "{OriginalName} (source filename without extension). Universal adds: {Series}, "
+                "{SeriesPosition}, {Subtitle}, {PrimaryTitle}. Use arbitrary prefix/suffix: "
+                "{Vol. SeriesPosition - } outputs 'Vol. 2 - ' when set, nothing when empty."
+            ),
+            default="{Author}/{Title} ({Year})",
+            placeholder="{Author}/{Series/}{Title} ({Year})",
+            show_when={"field": "FILE_ORGANIZATION", "value": "organize"},
+        ),
+        CheckboxField(
+            key="HARDLINK_TORRENTS",
+            label="Hardlink Book Torrents",
+            description="Create hardlinks instead of copying. Preserves seeding but archives won't be extracted. Don't use if destination is a library ingest folder.",
+            default=False,
+        ),
+        # === OPTIONS SECTION ===
+        HeadingField(
+            key="options_heading",
+            title="Options",
+        ),
+        NumberField(
+            key="MAX_CONCURRENT_DOWNLOADS",
+            label="Max Concurrent Downloads",
+            description="Maximum number of simultaneous downloads.",
+            default=3,
+            min_value=1,
+            max_value=10,
+            requires_restart=True,
+        ),
+        NumberField(
+            key="STATUS_TIMEOUT",
+            label="Status Timeout (seconds)",
+            description="How long to keep completed/failed downloads in the queue display.",
+            default=3600,
+            min_value=60,
+            max_value=86400,
+        ),
+    ]
+
+
+# Register the on_save handler for this tab
+register_on_save("downloads", _on_save_downloads)
+
+
+def _get_fast_source_options() -> list[dict[str, str | bool | int | None]]:
+    """Fast download sources - configurable list shown in settings."""
+    from bookflow.core.config import config
+    from bookflow.core.mirrors import get_download_source_missing_mirror_reason
+
+    has_donator_key = bool(config.get("AA_DONATOR_KEY", ""))
+    aa_fast_reason = get_download_source_missing_mirror_reason("aa-fast")
+    if not aa_fast_reason and not has_donator_key:
+        aa_fast_reason = "Requires Donator Key"
+    libgen_reason = get_download_source_missing_mirror_reason("libgen")
+
+    return [
+        {
+            "id": "aa-fast",
+            "label": "AA Fast Downloads",
+            "description": "Fast downloads for donators",
+            "isPinned": True,
+            "isLocked": aa_fast_reason is not None,
+            "disabledReason": aa_fast_reason,
+        },
+        {
+            "id": "libgen",
+            "label": "Library Genesis",
+            "description": "Instant downloads, no bypass needed",
+            "isPinned": True,
+            "isLocked": libgen_reason is not None,
+            "disabledReason": libgen_reason,
+        },
+    ]
+
+
+def _get_fast_source_defaults() -> list[dict[str, str | bool]]:
+    """Default values for fast sources display."""
+    return [
+        {"id": "aa-fast", "enabled": True},
+        {"id": "libgen", "enabled": True},
+    ]
+
+
+def _get_slow_source_options() -> list[dict[str, str | bool | None]]:
+    """Slow download sources - configurable order. All require bypasser."""
+    from bookflow.core.config import config
+    from bookflow.core.mirrors import get_download_source_missing_mirror_reason
+
+    bypass_enabled = config.get("USE_CF_BYPASS", True)
+
+    def _get_reason(source_id: str) -> str | None:
+        mirror_reason = get_download_source_missing_mirror_reason(source_id)
+        if mirror_reason:
+            return mirror_reason
+        if not bypass_enabled:
+            return "Requires Cloudflare bypass"
+        return None
+
+    return [
+        {
+            "id": "aa-slow-nowait",
+            "label": "AA Slow Downloads (No Waitlist)",
+            "description": "Partner servers",
+            "isLocked": _get_reason("aa-slow-nowait") is not None,
+            "disabledReason": _get_reason("aa-slow-nowait"),
+        },
+        {
+            "id": "aa-slow-wait",
+            "label": "AA Slow Downloads (Waitlist)",
+            "description": "Partner servers with countdown timer",
+            "isLocked": _get_reason("aa-slow-wait") is not None,
+            "disabledReason": _get_reason("aa-slow-wait"),
+        },
+        {
+            "id": "welib",
+            "label": "Welib",
+            "description": "Alternative mirror",
+            "isLocked": _get_reason("welib") is not None,
+            "disabledReason": _get_reason("welib"),
+        },
+        {
+            "id": "zlib",
+            "label": "Zlib",
+            "description": "Alternative mirror",
+            "isLocked": _get_reason("zlib") is not None,
+            "disabledReason": _get_reason("zlib"),
+        },
+    ]
+
+
+def _get_slow_source_defaults() -> list[dict[str, str | bool]]:
+    """Default source priority order for slow sources."""
+    from bookflow.config.env import _LEGACY_ALLOW_USE_WELIB
+
+    return [
+        {"id": "aa-slow-nowait", "enabled": True},
+        {"id": "aa-slow-wait", "enabled": True},
+        {"id": "welib", "enabled": _LEGACY_ALLOW_USE_WELIB},
+        {"id": "zlib", "enabled": True},
+    ]
+
+
+@register_settings(
+    "download_sources", "Download Sources", icon="download", order=21, group="direct_download"
+)
+def download_source_settings() -> list[SettingsField]:
+    """Return settings for download source behavior."""
+    return [
+        CheckboxField(
+            key="DIRECT_DOWNLOAD_ENABLED",
+            label="Enable Direct Download Source",
+            description=(
+                "Show Direct Download in release-source lists and allow Direct mode "
+                "searches. Add your own mirror URLs in the Mirrors tab before using it."
+            ),
+            default=False,
+        ),
+        CheckboxField(
+            key="DIRECT_DOWNLOAD_LANGUAGE_FROM_PATH",
+            label="Detect Language From Distant Path",
+            description=(
+                "When language metadata is missing or unknown, parse the distant path "
+                "(file path shown in search results) for language tags like [BD FR] or [En]. "
+                "Also enables local language filtering so lgli files without AA language "
+                "metadata are not excluded before the distant path can be checked."
+            ),
+            default=False,
+        ),
+        PasswordField(
+            key="AA_DONATOR_KEY",
+            label="Account Donator Key",
+            description="Enables fast download access on AA. Get this from your donator account page.",
+        ),
+        HeadingField(
+            key="source_priority_heading",
+            title="Source Priority",
+            description="Sources are tried in order until a download succeeds. Mirror-backed entries unlock automatically when you configure their mirrors.",
+        ),
+        OrderableListField(
+            key="FAST_SOURCES_DISPLAY",
+            label="Fast downloads",
+            description="Always tried first, no waiting or bypass required.",
+            options=_get_fast_source_options,
+            default=_get_fast_source_defaults(),
+        ),
+        OrderableListField(
+            key="SOURCE_PRIORITY",
+            label="Slow downloads",
+            description="Fallback sources, may have waiting. Requires bypasser. Drag to reorder.",
+            options=_get_slow_source_options,
+            default=_get_slow_source_defaults(),
+        ),
+        NumberField(
+            key="MAX_RETRY",
+            label="Max Retries",
+            description="Maximum retry attempts for failed downloads.",
+            default=10,
+            min_value=1,
+            max_value=50,
+        ),
+        NumberField(
+            key="DEFAULT_SLEEP",
+            label="Retry Delay (seconds)",
+            description="Wait time between download retry attempts.",
+            default=5,
+            min_value=1,
+            max_value=60,
+        ),
+        HeadingField(
+            key="content_type_routing_heading",
+            title="Content-Type Routing",
+            description="Route downloads to different folders based on content type. Only applies to Direct download source.",
+        ),
+        CheckboxField(
+            key="AA_CONTENT_TYPE_ROUTING",
+            label="Enable Content-Type Routing",
+            description="Override destination based on content type metadata.",
+            default=False,
+        ),
+        TextField(
+            key="AA_CONTENT_TYPE_DIR_FICTION",
+            label="Fiction Books",
+            placeholder="/books/fiction",
+            show_when={"field": "AA_CONTENT_TYPE_ROUTING", "value": True},
+        ),
+        TextField(
+            key="AA_CONTENT_TYPE_DIR_NON_FICTION",
+            label="Non-Fiction Books",
+            placeholder="/books/non-fiction",
+            show_when={"field": "AA_CONTENT_TYPE_ROUTING", "value": True},
+        ),
+        TextField(
+            key="AA_CONTENT_TYPE_DIR_UNKNOWN",
+            label="Unknown Books",
+            placeholder="/books/unknown",
+            show_when={"field": "AA_CONTENT_TYPE_ROUTING", "value": True},
+        ),
+        TextField(
+            key="AA_CONTENT_TYPE_DIR_MAGAZINE",
+            label="Magazines",
+            placeholder="/books/magazines",
+            show_when={"field": "AA_CONTENT_TYPE_ROUTING", "value": True},
+        ),
+        TextField(
+            key="AA_CONTENT_TYPE_DIR_COMIC",
+            label="Comic Books",
+            placeholder="/books/comics",
+            show_when={"field": "AA_CONTENT_TYPE_ROUTING", "value": True},
+        ),
+        TextField(
+            key="AA_CONTENT_TYPE_DIR_STANDARDS",
+            label="Standards Documents",
+            placeholder="/books/standards",
+            show_when={"field": "AA_CONTENT_TYPE_ROUTING", "value": True},
+        ),
+        TextField(
+            key="AA_CONTENT_TYPE_DIR_MUSICAL_SCORE",
+            label="Musical Scores",
+            placeholder="/books/scores",
+            show_when={"field": "AA_CONTENT_TYPE_ROUTING", "value": True},
+        ),
+        TextField(
+            key="AA_CONTENT_TYPE_DIR_OTHER",
+            label="Other",
+            placeholder="/books/other",
+            show_when={"field": "AA_CONTENT_TYPE_ROUTING", "value": True},
+        ),
+    ]
+
+
+@register_settings(
+    "cloudflare_bypass", "Cloudflare Bypass", icon="shield", order=22, group="direct_download"
+)
+def cloudflare_bypass_settings() -> list[SettingsField]:
+    """Return settings for Cloudflare bypass behavior."""
+    return [
+        CheckboxField(
+            key="USE_CF_BYPASS",
+            label="Enable Cloudflare Bypass",
+            description="Attempt to bypass Cloudflare protection on download sites.",
+            default=True,
+            requires_restart=True,
+        ),
+        CheckboxField(
+            key="USING_EXTERNAL_BYPASSER",
+            label="Use External Bypasser",
+            description="Use FlareSolverr or similar external service instead of built-in bypasser. Caution: May have limitations with custom DNS, Tor and proxies. You may experience slower downloads and and poorer reliability compared to the internal bypasser.",
+            default=False,
+            requires_restart=True,
+        ),
+        TextField(
+            key="EXT_BYPASSER_URL",
+            label="External Bypasser URL",
+            description="URL of the external bypasser service (e.g., FlareSolverr).",
+            default="http://flaresolverr:8191",
+            placeholder="http://flaresolverr:8191",
+            requires_restart=True,
+            show_when={"field": "USING_EXTERNAL_BYPASSER", "value": True},
+        ),
+        TextField(
+            key="EXT_BYPASSER_PATH",
+            label="External Bypasser Path",
+            description="API path for the external bypasser.",
+            default="/v1",
+            placeholder="/v1",
+            requires_restart=True,
+            show_when={"field": "USING_EXTERNAL_BYPASSER", "value": True},
+        ),
+        NumberField(
+            key="EXT_BYPASSER_TIMEOUT",
+            label="External Bypasser Timeout (ms)",
+            description="Timeout for external bypasser requests in milliseconds.",
+            default=60000,
+            min_value=10000,
+            max_value=300000,
+            requires_restart=True,
+            show_when={"field": "USING_EXTERNAL_BYPASSER", "value": True},
+        ),
+    ]
+
+
+def _on_save_mirrors(values: dict[str, Any]) -> dict[str, Any]:
+    """Normalize mirror list settings before persisting."""
+    from bookflow.core.utils import normalize_http_url
+
+    mirror_list_keys = {
+        "AA_MIRROR_URLS",
+        "LIBGEN_MIRROR_URLS",
+        "ZLIB_MIRROR_URLS",
+        "WELIB_MIRROR_URLS",
+    }
+
+    for key in mirror_list_keys:
+        raw_urls = values.get(key)
+        if raw_urls is None:
+            continue
+
+        if isinstance(raw_urls, str):
+            parts = [p.strip() for p in raw_urls.split(",") if p.strip()]
+        elif isinstance(raw_urls, list):
+            parts = [str(p).strip() for p in raw_urls if str(p).strip()]
+        else:
+            parts = []
+
+        normalized: list[str] = []
+        for url in parts:
+            if url.lower() == "auto":
+                continue
+            norm = normalize_http_url(url, default_scheme="https")
+            if norm and norm not in normalized:
+                normalized.append(norm)
+
+        values[key] = normalized
+
+    return {"error": False, "values": values}
+
+
+# Register the on_save handler for this tab
+register_on_save("mirrors", _on_save_mirrors)
+
+
+@register_settings("mirrors", "Mirrors", icon="globe", order=23, group="direct_download")
+def mirror_settings() -> list[SettingsField]:
+    """Configure download source mirrors."""
+    return [
+        # === PRIMARY SOURCE ===
+        HeadingField(
+            key="aa_mirrors_heading",
+            title="Anna's Archive",
+            description=(
+                "Add your own Anna's Archive mirror URLs here. Auto mode will try them in the "
+                "order listed below."
+            ),
+        ),
+        SelectField(
+            key="AA_BASE_URL",
+            label="Primary Mirror",
+            description=(
+                "Select Auto to try mirrors from your list on startup and fail over on errors. "
+                "Choosing a specific mirror pins BookFlow to that URL."
+            ),
+            options=_get_aa_base_url_options,
+            default="auto",
+        ),
+        TagListField(
+            key="AA_MIRROR_URLS",
+            label="Mirrors",
+            description=(
+                "List the Anna's Archive mirror URLs you want BookFlow to use. Type a URL and "
+                "press Enter to add it. Order matters when Auto is selected."
+            ),
+            placeholder="https://your-aa-mirror.example",
+            default=[],
+        ),
+        # === LIBGEN ===
+        TagListField(
+            key="LIBGEN_MIRROR_URLS",
+            label="LibGen",
+            description="Mirrors are tried in the order you add them until one works.",
+            placeholder="https://your-libgen-mirror.example",
+        ),
+        # === Z-LIBRARY ===
+        TagListField(
+            key="ZLIB_MIRROR_URLS",
+            label="Z-Library",
+            description="Only the first mirror in the list is used.",
+            placeholder="https://your-zlibrary-mirror.example",
+        ),
+        # === WELIB ===
+        TagListField(
+            key="WELIB_MIRROR_URLS",
+            label="Welib",
+            description="Only the first mirror in the list is used.",
+            placeholder="https://your-welib-mirror.example",
+        ),
+    ]
+
+
+@register_settings("advanced", "Advanced", icon="cog", order=15)
+def advanced_settings() -> list[SettingsField]:
+    """Advanced settings for power users."""
+    return [
+        TextField(
+            key="URL_BASE",
+            label="Base Path",
+            description="Optional URL path prefix. Use a path like /bookflow (no hostname). Leave blank for root.",
+            placeholder="/bookflow",
+            requires_restart=True,
+        ),
+        CheckboxField(
+            key="DEBUG",
+            label="Debug Mode",
+            description="Enable verbose logging to console and file. Not recommended for normal use.",
+            default=False,
+            requires_restart=True,
+        ),
+        NumberField(
+            key="MAIN_LOOP_SLEEP_TIME",
+            label="Queue Check Interval (seconds)",
+            description="How often the download queue is checked for new items.",
+            default=5,
+            min_value=1,
+            max_value=60,
+            requires_restart=True,
+        ),
+        NumberField(
+            key="DOWNLOAD_PROGRESS_UPDATE_INTERVAL",
+            label="Progress Update Interval (seconds)",
+            description="How often download progress is broadcast to the UI.",
+            default=1,
+            min_value=1,
+            max_value=10,
+            requires_restart=True,
+        ),
+        TextField(
+            key="CUSTOM_SCRIPT",
+            label="Custom Script Path",
+            description="Path to a script to run after each successful download. Must be executable.",
+            placeholder="/path/to/script.sh",
+        ),
+        SelectField(
+            key="CUSTOM_SCRIPT_PATH_MODE",
+            label="Custom Script Path Mode",
+            description="Pass the path to the custom script as an absolute path or relative to the destination folder.",
+            options=[
+                {
+                    "value": "absolute",
+                    "label": "Absolute",
+                    "description": "Pass the full destination path (default).",
+                },
+                {
+                    "value": "relative",
+                    "label": "Relative",
+                    "description": "Pass the path relative to the destination folder.",
+                },
+            ],
+            default="absolute",
+        ),
+        CheckboxField(
+            key="CUSTOM_SCRIPT_JSON_PAYLOAD",
+            label="Custom Script JSON Payload",
+            description="Send a JSON payload to the script via stdin. Useful for multi-file imports or richer metadata without relying on path parsing.",
+            default=False,
+        ),
+        HeadingField(
+            key="remote_path_mappings_heading",
+            title="Remote Path Mappings",
+            description="Map download client paths to paths inside BookFlow. Needed when volume mounts differ between containers.",
+        ),
+        NumberField(
+            key="DOWNLOAD_CLIENT_COMPLETED_PATH_TIMEOUT",
+            label="Completed Path Wait (seconds)",
+            description=(
+                "How long to wait after a torrent or usenet client reports completion "
+                "for the completed file path to become visible to BookFlow. Increase "
+                "this for seedbox or remote-sync workflows."
+            ),
+            default=_DOWNLOAD_CLIENT_COMPLETED_PATH_TIMEOUT_DEFAULT,
+            min_value=0,
+            max_value=_DOWNLOAD_CLIENT_COMPLETED_PATH_TIMEOUT_MAX,
+        ),
+        TableField(
+            key="PROWLARR_REMOTE_PATH_MAPPINGS",
+            label="Path Mappings",
+            columns=[
+                {
+                    "key": "host",
+                    "label": "Client",
+                    "type": "select",
+                    "options": [
+                        {"value": "qbittorrent", "label": "qBittorrent"},
+                        {"value": "transmission", "label": "Transmission"},
+                        {"value": "deluge", "label": "Deluge"},
+                        {"value": "rtorrent", "label": "rTorrent"},
+                        {"value": "nzbget", "label": "NZBGet"},
+                        {"value": "sabnzbd", "label": "SABnzbd"},
+                    ],
+                    "defaultValue": "qbittorrent",
+                },
+                {
+                    "key": "remotePath",
+                    "label": "Remote Path",
+                    "type": "path",
+                },
+                {
+                    "key": "localPath",
+                    "label": "Local Path",
+                    "type": "path",
+                },
+            ],
+            default=[],
+            add_label="Add Mapping",
+            empty_message="No mappings configured.",
+            env_supported=False,
+        ),
+        HeadingField(
+            key="covers_cache_heading",
+            title="Cover Image Cache",
+            description="Cache book cover images locally for faster loading. Works for both Direct Download and Universal mode.",
+        ),
+        CheckboxField(
+            key="COVERS_CACHE_ENABLED",
+            label="Enable Cover Cache",
+            description="Cache book covers on the server for faster loading.",
+            default=True,
+        ),
+        NumberField(
+            key="COVERS_CACHE_TTL",
+            label="Cache TTL (days)",
+            description="How long to keep cached covers. Set to 0 to keep forever (recommended for static artwork).",
+            default=0,
+            min_value=0,
+            max_value=365,
+        ),
+        NumberField(
+            key="COVERS_CACHE_MAX_SIZE_MB",
+            label="Max Cache Size (MB)",
+            description="Maximum disk space for cached covers. Oldest images are removed when limit is reached.",
+            default=500,
+            min_value=50,
+            max_value=5000,
+        ),
+        ActionButton(
+            key="clear_covers_cache",
+            label="Clear Cover Cache",
+            description="Delete all cached cover images.",
+            style="danger",
+            callback=_clear_covers_cache,
+        ),
+        HeadingField(
+            key="metadata_cache_heading",
+            title="Metadata Cache",
+            description="Cache book metadata from providers (Hardcover, Open Library) to reduce API calls and speed up repeated searches.",
+        ),
+        CheckboxField(
+            key="METADATA_CACHE_ENABLED",
+            label="Enable Metadata Caching",
+            description="When disabled, all metadata searches hit the provider API directly.",
+            default=True,
+        ),
+        NumberField(
+            key="METADATA_CACHE_SEARCH_TTL",
+            label="Search Results Cache (seconds)",
+            description="How long to cache search results. Default: 300 (5 minutes). Max: 604800 (7 days).",
+            default=300,
+            min_value=60,
+            max_value=604800,
+            show_when={"field": "METADATA_CACHE_ENABLED", "value": True},
+        ),
+        NumberField(
+            key="METADATA_CACHE_BOOK_TTL",
+            label="Book Details Cache (seconds)",
+            description="How long to cache individual book details. Default: 600 (10 minutes). Max: 604800 (7 days).",
+            default=600,
+            min_value=60,
+            max_value=604800,
+            show_when={"field": "METADATA_CACHE_ENABLED", "value": True},
+        ),
+        ActionButton(
+            key="clear_metadata_cache",
+            label="Clear Metadata Cache",
+            description="Clear all cached search results and book details.",
+            style="danger",
+            callback=_clear_metadata_cache,
+        ),
+    ]
+
+
+register_on_save("advanced", _on_save_advanced)

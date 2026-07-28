@@ -1,0 +1,100 @@
+name: Build Kobo patcher
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to build when this is not a tag build
+        required: true
+        default: "1.0.0"
+  push:
+    tags:
+      - "kobo-patcher-v*"
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  windows-x64:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          architecture: x64
+      - name: Test patcher core
+        shell: pwsh
+        run: |
+          python -m pip install pytest
+          $env:PYTHONPATH = "tools"
+          python -m pytest tools/kobo_patcher/tests -q
+      - name: Build self-contained EXE
+        shell: pwsh
+        run: |
+          $version = if ("${{ github.ref_name }}" -like "kobo-patcher-v*") {
+            "${{ github.ref_name }}".Substring(14)
+          } elseif ("${{ github.ref_name }}" -like "v*") {
+            "${{ github.ref_name }}".Substring(1)
+          } else {
+            "${{ inputs.version }}"
+          }
+          .\tools\kobo_patcher\build.ps1 -Version $version
+      - name: Inspect self-contained EXE
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem "tools\kobo_patcher\dist\BookFlowKoboPatcher-*-win-x64.exe" | Select-Object -First 1
+          if ($null -eq $exe) { throw "The versioned Kobo patcher EXE is missing." }
+          $bytes = [IO.File]::ReadAllBytes($exe.FullName)
+          if ($bytes.Length -lt 2 -or $bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) { throw "Patcher is not a Windows executable." }
+          $archive = [Text.Encoding]::ASCII.GetString($bytes)
+          foreach ($required in @("python312.dll", "_tkinter.pyd", "tcl86t.dll", "tk86t.dll")) {
+            if (-not $archive.Contains($required)) { throw "Self-contained runtime entry is missing: $required" }
+          }
+          $checksum = Get-Content -Raw "$($exe.FullName).sha256"
+          $actual = (Get-FileHash -Algorithm SHA256 $exe.FullName).Hash.ToLowerInvariant()
+          if ($checksum.Trim() -ne "$actual  $($exe.Name)") { throw "Patcher checksum does not match the EXE." }
+          $sbom = Get-Content -Raw "$($exe.FullName).spdx.json" | ConvertFrom-Json
+          if ($sbom.bookflow_kobo_patcher.protocol_version -ne 1 -or $sbom.bookflow_kobo_patcher.target -ne "win-x64") { throw "Patcher SBOM protocol metadata is invalid." }
+          if (-not ($sbom.packages | Where-Object { $_.SPDXID -eq "SPDXRef-Python" -and $_.versionInfo -like "3.12.*" })) { throw "Patcher SBOM does not record Python 3.12." }
+      - name: Authenticode-sign production asset
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          SIGNING_CERT_BASE64: ${{ secrets.WINDOWS_SIGNING_CERT_BASE64 }}
+          SIGNING_CERT_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERT_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:SIGNING_CERT_BASE64)) {
+            Write-Host "No signing certificate configured; publishing unsigned release asset."
+            exit 0
+          }
+          $certificate = Join-Path $env:RUNNER_TEMP "bookflow-signing.pfx"
+          try {
+            [IO.File]::WriteAllBytes($certificate, [Convert]::FromBase64String($env:SIGNING_CERT_BASE64))
+            $signTool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" |
+              Sort-Object FullName |
+              Select-Object -Last 1
+            if ($null -eq $signTool) { throw "Windows signtool.exe is unavailable on this runner." }
+            $exe = Get-ChildItem "tools\kobo_patcher\dist\BookFlowKoboPatcher-*-win-x64.exe" |
+              Select-Object -First 1
+            if ($null -eq $exe) { throw "The Kobo patcher EXE is missing." }
+            & $signTool.FullName sign /fd SHA256 /f $certificate /p $env:SIGNING_CERT_PASSWORD /tr http://timestamp.digicert.com /td SHA256 $exe.FullName
+            if ($LASTEXITCODE -ne 0) { throw "Authenticode signing failed." }
+            $signature = Get-AuthenticodeSignature -FilePath $exe.FullName
+            if ($signature.Status -ne "Valid") { throw "Authenticode signature is not valid: $($signature.Status)" }
+            $hash = (Get-FileHash -Algorithm SHA256 $exe.FullName).Hash.ToLowerInvariant()
+            Set-Content -NoNewline -Encoding ascii -Path "$($exe.FullName).sha256" -Value "$hash  $($exe.Name)"
+          } finally {
+            Remove-Item -LiteralPath $certificate -Force -ErrorAction SilentlyContinue
+          }
+      - name: Upload patcher artefacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: BookFlowKoboPatcher-win-x64
+          path: tools/kobo_patcher/dist/*
+      - name: Publish tagged release assets
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: tools/kobo_patcher/dist/*

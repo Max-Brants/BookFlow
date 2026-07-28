@@ -1,0 +1,17 @@
+services:
+  bookflow:
+    # Required: set BOOKFLOW_IMAGE in .env to an immutable image digest from
+    # this fork, for example ghcr.io/muneebabbas/bookflow@sha256:<digest>.
+    image: ${BOOKFLOW_IMAGE:?Set BOOKFLOW_IMAGE to an immutable fork image digest in .env}
+    container_name: bookflow
+    environment:
+      PUID: 1000
+      PGID: 1000
+    ports:
+      - 8084:8084
+    restart: unless-stopped
+    volumes:
+      - /path/to/books:/books # Default destination for book downloads
+      - /path/to/config:/config # App configuration
+      # Required for torrent / usenet - path must match your download client's volume exactly
+      # - /path/to/downloads:/path/to/downloads

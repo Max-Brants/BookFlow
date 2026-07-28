@@ -1,0 +1,164 @@
+from __future__ import annotations
+
+from collections import defaultdict
+
+import bookflow.config.settings as settings_config
+import bookflow.metadata_providers.googlebooks as googlebooks_provider
+import bookflow.metadata_providers.hardcover as hardcover_provider
+import bookflow.metadata_providers.openlibrary as openlibrary_provider
+import bookflow.release_sources.irc.settings as irc_settings
+import bookflow.release_sources.prowlarr.settings as prowlarr_settings
+
+_REGISTERED_SETTINGS_MODULES = (
+    settings_config,
+    googlebooks_provider,
+    hardcover_provider,
+    openlibrary_provider,
+    irc_settings,
+    prowlarr_settings,
+)
+
+
+def _group_save_calls(
+    save_calls: list[tuple[str, dict[str, object]]],
+) -> dict[str, list[dict[str, object]]]:
+    grouped: dict[str, list[dict[str, object]]] = defaultdict(list)
+    for tab_name, payload in save_calls:
+        grouped[tab_name].append(payload)
+    return grouped
+
+
+def test_get_onboarding_config_uses_release_source_settings_pages():
+    from bookflow.core.onboarding import get_onboarding_config
+
+    config = get_onboarding_config()
+    steps = {step["id"]: step for step in config["steps"]}
+
+    assert "release_sources" in steps
+    assert "direct_download_setup" in steps
+    assert "direct_download_cloudflare_bypass" in steps
+    assert "prowlarr" in steps
+    assert "audiobookbay" not in steps
+    assert "irc" in steps
+
+    direct_download_fields = {
+        field["key"] for field in steps["direct_download_setup"]["fields"] if "key" in field
+    }
+    direct_download_bypass_fields = {
+        field["key"]
+        for field in steps["direct_download_cloudflare_bypass"]["fields"]
+        if "key" in field
+    }
+    prowlarr_fields = {
+        field["key"]: field for field in steps["prowlarr"]["fields"] if "key" in field
+    }
+    assert "DIRECT_DOWNLOAD_ENABLED" not in direct_download_fields
+    assert "FAST_SOURCES_DISPLAY" not in direct_download_fields
+    assert "SOURCE_PRIORITY" not in direct_download_fields
+    assert "AA_DONATOR_KEY" in direct_download_fields
+    assert "AA_MIRROR_URLS" in direct_download_fields
+    assert "LIBGEN_ADDITIONAL_URLS" not in direct_download_fields
+    assert "ZLIB_PRIMARY_URL" not in direct_download_fields
+    assert "EXT_BYPASSER_TIMEOUT" not in direct_download_bypass_fields
+    assert "PROWLARR_ENABLED" not in prowlarr_fields
+    assert "PROWLARR_AUTO_EXPAND" not in prowlarr_fields
+    assert "showWhen" not in prowlarr_fields["PROWLARR_URL"]
+
+
+def test_save_onboarding_settings_enables_selected_release_sources(monkeypatch):
+    import bookflow.core.config as app_config
+    import bookflow.core.onboarding as onboarding
+
+    save_calls: list[tuple[str, dict[str, object]]] = []
+
+    def _fake_save(tab_name: str, values: dict[str, object]) -> bool:
+        save_calls.append((tab_name, dict(values)))
+        return True
+
+    monkeypatch.setattr(onboarding, "save_config_file", _fake_save)
+    monkeypatch.setattr(onboarding, "mark_onboarding_complete", lambda: True)
+    monkeypatch.setattr(app_config.config, "refresh", lambda: None, raising=False)
+
+    result = onboarding.save_onboarding_settings(
+        {
+            "METADATA_PROVIDER": "hardcover",
+            "HARDCOVER_API_KEY": "hardcover-api-key",
+            onboarding.ONBOARDING_RELEASE_SOURCES_KEY: [
+                "direct_download",
+                "prowlarr",
+            ],
+            "AA_MIRROR_URLS": ["https://annas-archive.example"],
+            "PROWLARR_URL": "http://prowlarr:9696",
+            "PROWLARR_API_KEY": "secret-key",
+        }
+    )
+
+    grouped_calls = _group_save_calls(save_calls)
+
+    assert result == {"success": True, "message": "Onboarding complete!"}
+    assert any(
+        payload.get("DIRECT_DOWNLOAD_ENABLED") is True
+        for payload in grouped_calls["download_sources"]
+    )
+    assert any(
+        payload.get("AA_MIRROR_URLS") == ["https://annas-archive.example"]
+        for payload in grouped_calls["mirrors"]
+    )
+    assert any(
+        payload.get("PROWLARR_ENABLED") is True for payload in grouped_calls["prowlarr_config"]
+    )
+    assert any(
+        payload.get("PROWLARR_URL") == "http://prowlarr:9696"
+        and payload.get("PROWLARR_API_KEY") == "secret-key"
+        for payload in grouped_calls["prowlarr_config"]
+    )
+    assert any(
+        payload.get("HARDCOVER_ENABLED") is True
+        and payload.get("HARDCOVER_API_KEY") == "hardcover-api-key"
+        for payload in grouped_calls["hardcover"]
+    )
+    assert any(
+        payload.get("DEFAULT_RELEASE_SOURCE") == "direct_download"
+        for payload in grouped_calls["discovery"]
+    )
+    assert not any(
+        onboarding.ONBOARDING_RELEASE_SOURCES_KEY in payload for _, payload in save_calls
+    )
+
+
+def test_save_onboarding_settings_skips_hidden_fields(monkeypatch):
+    import bookflow.core.config as app_config
+    import bookflow.core.onboarding as onboarding
+
+    save_calls: list[tuple[str, dict[str, object]]] = []
+
+    def _fake_save(tab_name: str, values: dict[str, object]) -> bool:
+        save_calls.append((tab_name, dict(values)))
+        return True
+
+    monkeypatch.setattr(onboarding, "save_config_file", _fake_save)
+    monkeypatch.setattr(onboarding, "mark_onboarding_complete", lambda: True)
+    monkeypatch.setattr(app_config.config, "refresh", lambda: None, raising=False)
+
+    result = onboarding.save_onboarding_settings(
+        {
+            onboarding.ONBOARDING_RELEASE_SOURCES_KEY: ["direct_download"],
+            "USE_CF_BYPASS": True,
+            "USING_EXTERNAL_BYPASSER": False,
+            "EXT_BYPASSER_URL": "http://should-not-save.example",
+            "EXT_BYPASSER_PATH": "/v2",
+            "EXT_BYPASSER_TIMEOUT": 120000,
+        }
+    )
+
+    grouped_calls = _group_save_calls(save_calls)
+    bypass_payloads = grouped_calls["cloudflare_bypass"]
+
+    assert result == {"success": True, "message": "Onboarding complete!"}
+    assert any(
+        payload.get("USE_CF_BYPASS") is True and payload.get("USING_EXTERNAL_BYPASSER") is False
+        for payload in bypass_payloads
+    )
+    assert all("EXT_BYPASSER_URL" not in payload for payload in bypass_payloads)
+    assert all("EXT_BYPASSER_PATH" not in payload for payload in bypass_payloads)
+    assert all("EXT_BYPASSER_TIMEOUT" not in payload for payload in bypass_payloads)

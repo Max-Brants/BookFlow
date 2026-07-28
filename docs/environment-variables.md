@@ -1,0 +1,1893 @@
+# Environment Variables
+
+This document lists all configuration options that can be set via environment variables.
+
+> **Auto-generated** - Do not edit manually. Run `python scripts/generate_env_docs.py` to regenerate.
+
+## Table of Contents
+
+- [Bootstrap Configuration](#bootstrap-configuration)
+- [Egress / VPN Routing](#egress--vpn-routing)
+- [General](#general)
+- [Release Discovery](#release-discovery)
+- [Downloads](#downloads)
+- [Security](#security)
+- [Network](#network)
+- [Trending-boeken](#trending-boeken)
+- [Advanced](#advanced)
+- [Prowlarr](#prowlarr)
+- [Newznab](#newznab)
+- [IRC](#irc)
+- [Download Clients](#download-clients)
+- [Metadata Providers](#metadata-providers)
+  - [Hardcover](#metadata-providers-hardcover)
+  - [Open Library](#metadata-providers-open-library)
+  - [Google Books](#metadata-providers-google-books)
+  - [KB Nederlandse Bibliografie](#metadata-providers-kb-nederlandse-bibliografie)
+  - [DBNL](#metadata-providers-dbnl)
+  - [Apple Books](#metadata-providers-apple-books)
+- [Direct Download](#direct-download)
+  - [Download Sources](#direct-download-download-sources)
+  - [Cloudflare Bypass](#direct-download-cloudflare-bypass)
+  - [Mirrors](#direct-download-mirrors)
+
+---
+
+## Bootstrap Configuration
+
+These environment variables are used at startup before the settings system loads. They typically configure paths, server settings, and authentication startup behavior.
+
+| Variable | Description | Type | Default |
+|----------|-------------|------|---------|
+| `CONFIG_DIR` | Directory for storing configuration files and plugin settings. | string (path) | `/config` |
+| `LOG_ROOT` | Root directory for log files. | string (path) | `/var/log/` |
+| `TMP_DIR` | Staging directory for downloads before moving to destination. | string (path) | `/tmp/bookflow` |
+| `ENABLE_LOGGING` | Enable file logging under LOG_ROOT/bookflow/ (including bookflow.log and startup logs). | boolean | `true` |
+| `FLASK_HOST` | Host address for the Flask web server. | string | `0.0.0.0` |
+| `FLASK_PORT` | Port number for the Flask web server. | number | `8084` |
+| `SESSION_COOKIE_SECURE` | Enable secure cookies (requires HTTPS). | boolean | `false` |
+| `CWA_DB_PATH` | Path to the Calibre-Web database for authentication integration. | string (path) | `/auth/app.db` |
+| `HIDE_LOCAL_AUTH` | Hide the username/password login form when OIDC is active. | boolean | `false` |
+| `DISABLE_LOCAL_AUTH` | Disable username/password login and remove the local-admin prerequisite for OIDC. Implies HIDE_LOCAL_AUTH; with AUTH_METHOD=builtin, everyone is locked out until auth env vars are changed. | boolean | `false` |
+| `OIDC_AUTO_REDIRECT` | Automatically redirect to the OIDC provider instead of showing the login page. | boolean | `false` |
+| `DOCKERMODE` | Indicates the application is running inside a Docker container. | boolean | `false` |
+| `ONBOARDING` | Show the onboarding wizard on first run. Set to false to skip (useful for ephemeral storage). | boolean | `true` |
+
+<details>
+<summary>Detailed descriptions</summary>
+
+#### `CONFIG_DIR`
+
+Directory for storing configuration files and plugin settings.
+
+- **Type:** string (path)
+- **Default:** `/config`
+
+#### `LOG_ROOT`
+
+Root directory for log files.
+
+- **Type:** string (path)
+- **Default:** `/var/log/`
+
+#### `TMP_DIR`
+
+Staging directory for downloads before moving to destination.
+
+- **Type:** string (path)
+- **Default:** `/tmp/bookflow`
+
+#### `ENABLE_LOGGING`
+
+Enable file logging under LOG_ROOT/bookflow/ (including bookflow.log and startup logs).
+
+- **Type:** boolean
+- **Default:** `true`
+
+#### `FLASK_HOST`
+
+Host address for the Flask web server.
+
+- **Type:** string
+- **Default:** `0.0.0.0`
+
+#### `FLASK_PORT`
+
+Port number for the Flask web server.
+
+- **Type:** number
+- **Default:** `8084`
+
+#### `SESSION_COOKIE_SECURE`
+
+Enable secure cookies (requires HTTPS).
+
+- **Type:** boolean
+- **Default:** `false`
+
+#### `CWA_DB_PATH`
+
+Path to the Calibre-Web database for authentication integration.
+
+- **Type:** string (path)
+- **Default:** `/auth/app.db`
+
+#### `HIDE_LOCAL_AUTH`
+
+Hide the username/password login form when OIDC is active.
+
+- **Type:** boolean
+- **Default:** `false`
+
+#### `DISABLE_LOCAL_AUTH`
+
+Disable username/password login and remove the local-admin prerequisite for OIDC. Implies HIDE_LOCAL_AUTH; with AUTH_METHOD=builtin, everyone is locked out until auth env vars are changed.
+
+- **Type:** boolean
+- **Default:** `false`
+
+#### `OIDC_AUTO_REDIRECT`
+
+Automatically redirect to the OIDC provider instead of showing the login page.
+
+- **Type:** boolean
+- **Default:** `false`
+
+#### `DOCKERMODE`
+
+Indicates the application is running inside a Docker container.
+
+- **Type:** boolean
+- **Default:** `false`
+
+#### `ONBOARDING`
+
+Show the onboarding wizard on first run. Set to false to skip (useful for ephemeral storage).
+
+- **Type:** boolean
+- **Default:** `true`
+
+</details>
+
+## Egress / VPN Routing
+
+These startup-only variables are consumed by `entrypoint.sh` / `wireguard.sh` to select and configure the WireGuard transparent-egress kill-switch. `USING_WIREGUARD` and [`USING_TOR`](#using_tor) (documented under Network) are mutually exclusive; both require root startup.
+
+| Variable | Description | Type | Default |
+|----------|-------------|------|---------|
+| `USING_WIREGUARD` | Route all traffic through a WireGuard VPN tunnel with a fail-closed iptables kill-switch (non-tunnel egress is dropped). Requires root startup and NET_ADMIN (plus NET_RAW). Mutually exclusive with USING_TOR. | boolean | `false` |
+| `WIREGUARD_CONFIG` | Path to the mounted wg-quick configuration file. | string (path) | `/config/wg0.conf` |
+| `WIREGUARD_INTERFACE` | WireGuard interface name brought up by wg-quick. | string | `wg0` |
+| `LAN_NETWORK` | Comma-separated CIDRs kept off the tunnel so the WebUI and internal download clients (Prowlarr, qBittorrent) stay reachable. | string (comma-separated) | `127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16` |
+| `WIREGUARD_ENFORCE_DNS` | Pin the container's resolver so DNS cannot silently fall back to an off-tunnel path. The resolver used is WIREGUARD_DNS if set, else the tunnel config's DNS = line. This does NOT force queries through the tunnel: it is designed for a trusted LAN resolver kept reachable off-tunnel via LAN_NETWORK (the query leaves over the LAN; the resolver encrypts upstream while the download still egresses via the tunnel). Special case: when Docker's embedded resolver (nameserver 127.0.0.11) is present, it is PRESERVED so container-name resolution (e.g. prowlarr, qbittorrent) keeps working, and the embedded resolver's upstream must be pinned via the container's compose dns: list. Fails closed (refuses to start) only when no embedded resolver is present AND no resolver is defined, or /etc/resolv.conf is not writable. | boolean | `true` |
+| `WIREGUARD_DNS` | Explicit resolver(s) (comma/space separated) to pin when WIREGUARD_ENFORCE_DNS is true and Docker's embedded resolver is NOT in use. Use when the VPN's pushed DNS filters domains you need; point it at a resolver reachable via the tunnel or an allowed LAN resolver. NOTE: when the embedded resolver (127.0.0.11) is present it is preserved and this value cannot repoint its upstream from inside the container — set the container's compose dns: list to the trusted resolver instead. | string (comma-separated) | `unset (uses config DNS = line)` |
+| `WIREGUARD_DISABLE_IPV6` | Strip IPv6 Address/AllowedIPs/DNS from the tunnel config before wg-quick (many container kernels lack the ip6tables raw table wg-quick needs) and remove IPv6 as a leak surface. | boolean | `true` |
+| `WIREGUARD_ALLOW_IPV6_LEAK` | Escape hatch: continue startup even when an IPv6 kill-switch cannot be installed AND IPv6 cannot be disabled. Only set when the container has no IPv6 connectivity, as IPv6 egress may otherwise bypass the tunnel. | boolean | `false` |
+| `WIREGUARD_ALLOW_WEBUI_OFFTUNNEL` | When false (default) the kill-switch is strictly fail-closed: the only off-tunnel egress permitted is loopback, the tunnel device and the LAN allowlist. Set true only if a NON-LAN client (e.g. a public reverse proxy on a different segment) must reach the WebUI; it permits app-server REPLY packets (--sport FLASK_PORT, conntrack REPLY) to leave off-tunnel. Server replies only, never client-initiated egress, so it cannot leak outbound browsing/downloads or the real IP for outbound requests, but it is still an off-tunnel path while the tunnel is down, hence opt-in. LAN WebUI clients never need it (covered by LAN_NETWORK). | boolean | `false` |
+| `WIREGUARD_STALE_AFTER` | Seconds since the last WireGuard handshake before the healthcheck bounces the tunnel. | number | `180` |
+
+<details>
+<summary>Detailed descriptions</summary>
+
+#### `USING_WIREGUARD`
+
+Route all traffic through a WireGuard VPN tunnel with a fail-closed iptables kill-switch (non-tunnel egress is dropped). Requires root startup and NET_ADMIN (plus NET_RAW). Mutually exclusive with USING_TOR.
+
+- **Type:** boolean
+- **Default:** `false`
+
+#### `WIREGUARD_CONFIG`
+
+Path to the mounted wg-quick configuration file.
+
+- **Type:** string (path)
+- **Default:** `/config/wg0.conf`
+
+#### `WIREGUARD_INTERFACE`
+
+WireGuard interface name brought up by wg-quick.
+
+- **Type:** string
+- **Default:** `wg0`
+
+#### `LAN_NETWORK`
+
+Comma-separated CIDRs kept off the tunnel so the WebUI and internal download clients (Prowlarr, qBittorrent) stay reachable.
+
+- **Type:** string (comma-separated)
+- **Default:** `127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16`
+
+#### `WIREGUARD_ENFORCE_DNS`
+
+Pin the container's resolver so DNS cannot silently fall back to an off-tunnel path. The resolver used is WIREGUARD_DNS if set, else the tunnel config's DNS = line. This does NOT force queries through the tunnel: it is designed for a trusted LAN resolver kept reachable off-tunnel via LAN_NETWORK (the query leaves over the LAN; the resolver encrypts upstream while the download still egresses via the tunnel). Special case: when Docker's embedded resolver (nameserver 127.0.0.11) is present, it is PRESERVED so container-name resolution (e.g. prowlarr, qbittorrent) keeps working, and the embedded resolver's upstream must be pinned via the container's compose dns: list. Fails closed (refuses to start) only when no embedded resolver is present AND no resolver is defined, or /etc/resolv.conf is not writable.
+
+- **Type:** boolean
+- **Default:** `true`
+
+#### `WIREGUARD_DNS`
+
+Explicit resolver(s) (comma/space separated) to pin when WIREGUARD_ENFORCE_DNS is true and Docker's embedded resolver is NOT in use. Use when the VPN's pushed DNS filters domains you need; point it at a resolver reachable via the tunnel or an allowed LAN resolver. NOTE: when the embedded resolver (127.0.0.11) is present it is preserved and this value cannot repoint its upstream from inside the container — set the container's compose dns: list to the trusted resolver instead.
+
+- **Type:** string (comma-separated)
+- **Default:** `unset (uses config DNS = line)`
+
+#### `WIREGUARD_DISABLE_IPV6`
+
+Strip IPv6 Address/AllowedIPs/DNS from the tunnel config before wg-quick (many container kernels lack the ip6tables raw table wg-quick needs) and remove IPv6 as a leak surface.
+
+- **Type:** boolean
+- **Default:** `true`
+
+#### `WIREGUARD_ALLOW_IPV6_LEAK`
+
+Escape hatch: continue startup even when an IPv6 kill-switch cannot be installed AND IPv6 cannot be disabled. Only set when the container has no IPv6 connectivity, as IPv6 egress may otherwise bypass the tunnel.
+
+- **Type:** boolean
+- **Default:** `false`
+
+#### `WIREGUARD_ALLOW_WEBUI_OFFTUNNEL`
+
+When false (default) the kill-switch is strictly fail-closed: the only off-tunnel egress permitted is loopback, the tunnel device and the LAN allowlist. Set true only if a NON-LAN client (e.g. a public reverse proxy on a different segment) must reach the WebUI; it permits app-server REPLY packets (--sport FLASK_PORT, conntrack REPLY) to leave off-tunnel. Server replies only, never client-initiated egress, so it cannot leak outbound browsing/downloads or the real IP for outbound requests, but it is still an off-tunnel path while the tunnel is down, hence opt-in. LAN WebUI clients never need it (covered by LAN_NETWORK).
+
+- **Type:** boolean
+- **Default:** `false`
+
+#### `WIREGUARD_STALE_AFTER`
+
+Seconds since the last WireGuard handshake before the healthcheck bounces the tunnel.
+
+- **Type:** number
+- **Default:** `180`
+
+</details>
+
+## General
+
+| Variable | Description | Type | Default |
+|----------|-------------|------|---------|
+| `SUPPORTED_FORMATS` | Book formats to include in search results. ZIP/RAR archives are extracted automatically and book files are used if found. | string (comma-separated) | `epub,mobi,azw3,fb2,djvu,cbz,cbr` |
+| `BOOK_LANGUAGE` | Default language filter for searches. | string (comma-separated) | `en` |
+
+<details>
+<summary>Detailed descriptions</summary>
+
+#### `SUPPORTED_FORMATS`
+
+**Supported Book Formats**
+
+Book formats to include in search results. ZIP/RAR archives are extracted automatically and book files are used if found.
+
+- **Type:** string (comma-separated)
+- **Default:** `epub,mobi,azw3,fb2,djvu,cbz,cbr`
+
+#### `BOOK_LANGUAGE`
+
+**Default Book Languages**
+
+Default language filter for searches.
+
+- **Type:** string (comma-separated)
+- **Default:** `en`
+
+</details>
+
+## Release Discovery
+
+| Variable | Description | Type | Default |
+|----------|-------------|------|---------|
+| `SHOW_RELEASE_SOURCE_LINKS` | Show clickable release-source links in release and details modals. Metadata provider links stay enabled. | boolean | `true` |
+| `METADATA_PROVIDER` | Choose which metadata provider to use for book searches. | string (choice) | `openlibrary` |
+| `DEFAULT_RELEASE_SOURCE` | The release source tab to open by default in the release modal for books. Leave unset to use the first available source. | string (choice) | _empty string_ |
+
+<details>
+<summary>Detailed descriptions</summary>
+
+#### `SHOW_RELEASE_SOURCE_LINKS`
+
+**Show Release Source Links**
+
+Show clickable release-source links in release and details modals. Metadata provider links stay enabled.
+
+- **Type:** boolean
+- **Default:** `true`
+
+#### `METADATA_PROVIDER`
+
+**Book Metadata Provider**
+
+Choose which metadata provider to use for book searches.
+
+- **Type:** string (choice)
+- **Default:** `openlibrary`
+- **Options:** `hardcover` (Hardcover), `openlibrary` (Open Library), `googlebooks` (Google Books), `kb_nbt` (KB Nederlandse Bibliografie), `dbnl` (DBNL), `applebooks` (Apple Books)
+
+#### `DEFAULT_RELEASE_SOURCE`
+
+**Default Book Release Source**
+
+The release source tab to open by default in the release modal for books. Leave unset to use the first available source.
+
+- **Type:** string (choice)
+- **Default:** _empty string_
+- **Options:** `""` (Use first available source)
+
+</details>
+
+## Downloads
+
+| Variable | Description | Type | Default |
+|----------|-------------|------|---------|
+| `INGEST_DIR` | Directory where completed Files are saved. | string | `/books` |
+| `FILE_ORGANIZATION` | Choose how downloaded book files are named and organized. | string (choice) | `rename` |
+| `TEMPLATE_RENAME` | Variables: {Author}, {Title}, {Year}, {User}, {OriginalName} (source filename without extension). Universal adds: {Series}, {SeriesPosition}, {Subtitle}, {PrimaryTitle}. Use arbitrary prefix/suffix: {Vol. SeriesPosition - } outputs 'Vol. 2 - ' when set, nothing when empty. Rename templates are filename-only (no '/' or '\'); use Organize for folders. Applies to single-file downloads. | string | `{Author} - {Title} ({Year})` |
+| `TEMPLATE_ORGANIZE` | Use / to create folders. Variables: {Author}, {Title}, {Year}, {User}, {OriginalName} (source filename without extension). Universal adds: {Series}, {SeriesPosition}, {Subtitle}, {PrimaryTitle}. Use arbitrary prefix/suffix: {Vol. SeriesPosition - } outputs 'Vol. 2 - ' when set, nothing when empty. | string | `{Author}/{Title} ({Year})` |
+| `HARDLINK_TORRENTS` | Create hardlinks instead of copying. Preserves seeding but archives won't be extracted. Don't use if destination is a library ingest folder. | boolean | `false` |
+| `MAX_CONCURRENT_DOWNLOADS` | Maximum number of simultaneous downloads. | number | `3` |
+| `STATUS_TIMEOUT` | How long to keep completed/failed downloads in the queue display. | number | `3600` |
+
+<details>
+<summary>Detailed descriptions</summary>
+
+#### `INGEST_DIR`
+
+**Destination**
+
+Directory where completed Files are saved.
+
+- **Type:** string
+- **Default:** `/books`
+- **Required:** Yes
+
+#### `FILE_ORGANIZATION`
+
+**File Organization**
+
+Choose how downloaded book files are named and organized.
+
+- **Type:** string (choice)
+- **Default:** `rename`
+- **Options:** `none` (None), `rename` (Rename Only), `organize` (Rename and Organize)
+
+#### `TEMPLATE_RENAME`
+
+**Naming Template**
+
+Variables: {Author}, {Title}, {Year}, {User}, {OriginalName} (source filename without extension). Universal adds: {Series}, {SeriesPosition}, {Subtitle}, {PrimaryTitle}. Use arbitrary prefix/suffix: {Vol. SeriesPosition - } outputs 'Vol. 2 - ' when set, nothing when empty. Rename templates are filename-only (no '/' or '\'); use Organize for folders. Applies to single-file downloads.
+
+- **Type:** string
+- **Default:** `{Author} - {Title} ({Year})`
+
+#### `TEMPLATE_ORGANIZE`
+
+**Path Template**
+
+Use / to create folders. Variables: {Author}, {Title}, {Year}, {User}, {OriginalName} (source filename without extension). Universal adds: {Series}, {SeriesPosition}, {Subtitle}, {PrimaryTitle}. Use arbitrary prefix/suffix: {Vol. SeriesPosition - } outputs 'Vol. 2 - ' when set, nothing when empty.
+
+- **Type:** string
+- **Default:** `{Author}/{Title} ({Year})`
+
+#### `HARDLINK_TORRENTS`
+
+**Hardlink Book Torrents**
+
+Create hardlinks instead of copying. Preserves seeding but archives won't be extracted. Don't use if destination is a library ingest folder.
+
+- **Type:** boolean
+- **Default:** `false`
+
+#### `MAX_CONCURRENT_DOWNLOADS`
+
+**Max Concurrent Downloads**
+
+Maximum number of simultaneous downloads.
+
+- **Type:** number
+- **Default:** `3`
+- **Requires restart:** Yes
+- **Constraints:** min: 1, max: 10
+
+#### `STATUS_TIMEOUT`
+
+**Status Timeout (seconds)**
+
+How long to keep completed/failed downloads in the queue display.
+
+- **Type:** number
+- **Default:** `3600`
+- **Constraints:** min: 60, max: 86400
+
+</details>
+
+## Security
+
+| Variable | Description | Type | Default |
+|----------|-------------|------|---------|
+| `AUTH_METHOD` | Select the authentication method for accessing BookFlow. Restart container after changing Calibre-Web passwords. | string (choice) | `none` |
+| `PROXY_AUTH_USER_HEADER` | The HTTP header your proxy uses to pass the authenticated username. | string | `X-Auth-User` |
+| `PROXY_AUTH_LOGOUT_URL` | The URL to redirect users to for logging out. Leave empty to disable logout functionality. | string | _empty string_ |
+| `PROXY_AUTH_ADMIN_GROUP_HEADER` | Optional: header your proxy uses to pass user groups/roles. | string | `X-Auth-Groups` |
+| `PROXY_AUTH_ADMIN_GROUP_NAME` | Optional: users in this group are treated as admins. Leave blank to skip group-based admin detection. | string | _empty string_ |
+| `OIDC_DISCOVERY_URL` | OpenID Connect discovery endpoint URL. Usually ends with /.well-known/openid-configuration. | string | _none_ |
+| `OIDC_CLIENT_ID` | OAuth2 client ID from your identity provider. | string | _none_ |
+| `OIDC_CLIENT_SECRET` | OAuth2 client secret from your identity provider. | string (secret) | _none_ |
+| `OIDC_SCOPES` | OAuth2 scopes to request from the identity provider. Managed automatically: includes essential scopes and the group claim when using admin group authorization. | string (comma-separated) | `openid,email,profile` |
+| `OIDC_GROUP_CLAIM` | The name of the claim in the ID token that contains user groups. | string | `groups` |
+| `OIDC_ADMIN_GROUP` | Users in this group will be given admin access (if enabled below). Leave empty to use database roles only. | string | _empty string_ |
+| `OIDC_USE_ADMIN_GROUP` | When enabled, users in the Admin Group are granted admin access. When disabled, admin access is determined solely by database roles. | boolean | `true` |
+| `OIDC_AUTO_PROVISION` | Automatically create a user account on first OIDC login. When disabled, users must be pre-created by an admin. | boolean | `true` |
+| `OIDC_BUTTON_LABEL` | Custom label for the OIDC sign-in button on the login page. | string | _empty string_ |
+
+<details>
+<summary>Detailed descriptions</summary>
+
+#### `AUTH_METHOD`
+
+**Authentication Method**
+
+Select the authentication method for accessing BookFlow. Restart container after changing Calibre-Web passwords.
+
+- **Type:** string (choice)
+- **Default:** `none`
+- **Options:** `none` (No Authentication), `builtin` (Local), `proxy` (Proxy Authentication), `oidc` (OIDC (OpenID Connect)), `cwa` (Calibre-Web Database)
+
+#### `PROXY_AUTH_USER_HEADER`
+
+**Proxy Auth User Header**
+
+The HTTP header your proxy uses to pass the authenticated username.
+
+- **Type:** string
+- **Default:** `X-Auth-User`
+
+#### `PROXY_AUTH_LOGOUT_URL`
+
+**Proxy Auth Logout URL**
+
+The URL to redirect users to for logging out. Leave empty to disable logout functionality.
+
+- **Type:** string
+- **Default:** _empty string_
+
+#### `PROXY_AUTH_ADMIN_GROUP_HEADER`
+
+**Proxy Auth Admin Group Header**
+
+Optional: header your proxy uses to pass user groups/roles.
+
+- **Type:** string
+- **Default:** `X-Auth-Groups`
+
+#### `PROXY_AUTH_ADMIN_GROUP_NAME`
+
+**Proxy Auth Admin Group**
+
+Optional: users in this group are treated as admins. Leave blank to skip group-based admin detection.
+
+- **Type:** string
+- **Default:** _empty string_
+
+#### `OIDC_DISCOVERY_URL`
+
+**Discovery URL**
+
+OpenID Connect discovery endpoint URL. Usually ends with /.well-known/openid-configuration.
+
+- **Type:** string
+- **Default:** _none_
+- **Required:** Yes
+
+#### `OIDC_CLIENT_ID`
+
+**Client ID**
+
+OAuth2 client ID from your identity provider.
+
+- **Type:** string
+- **Default:** _none_
+- **Required:** Yes
+
+#### `OIDC_CLIENT_SECRET`
+
+**Client Secret**
+
+OAuth2 client secret from your identity provider.
+
+- **Type:** string (secret)
+- **Default:** _none_
+- **Required:** Yes
+
+#### `OIDC_SCOPES`
+
+**Scopes**
+
+OAuth2 scopes to request from the identity provider. Managed automatically: includes essential scopes and the group claim when using admin group authorization.
+
+- **Type:** string (comma-separated)
+- **Default:** `openid,email,profile`
+
+#### `OIDC_GROUP_CLAIM`
+
+**Group Claim Name**
+
+The name of the claim in the ID token that contains user groups.
+
+- **Type:** string
+- **Default:** `groups`
+
+#### `OIDC_ADMIN_GROUP`
+
+**Admin Group Name**
+
+Users in this group will be given admin access (if enabled below). Leave empty to use database roles only.
+
+- **Type:** string
+- **Default:** _empty string_
+
+#### `OIDC_USE_ADMIN_GROUP`
+
+**Use Admin Group for Authorization**
+
+When enabled, users in the Admin Group are granted admin access. When disabled, admin access is determined solely by database roles.
+
+- **Type:** boolean
+- **Default:** `true`
+
+#### `OIDC_AUTO_PROVISION`
+
+**Auto-Provision Users**
+
+Automatically create a user account on first OIDC login. When disabled, users must be pre-created by an admin.
+
+- **Type:** boolean
+- **Default:** `true`
+
+#### `OIDC_BUTTON_LABEL`
+
+**Login Button Label**
+
+Custom label for the OIDC sign-in button on the login page.
+
+- **Type:** string
+- **Default:** _empty string_
+
+</details>
+
+## Network
+
+| Variable | Description | Type | Default |
+|----------|-------------|------|---------|
+| `CERTIFICATE_VALIDATION` | Controls SSL/TLS certificate verification for outbound connections. Disable for self-signed certificates on internal services (e.g. OIDC providers, Prowlarr). | string (choice) | `enabled` |
+| `CUSTOM_DNS` | DNS provider for domain resolution. 'Auto' rotates through providers on failure. | string (choice) | `auto` |
+| `CUSTOM_DNS_MANUAL` | Comma-separated list of DNS server IP addresses (e.g., 8.8.8.8, 1.1.1.1). | string | _none_ |
+| `USE_DOH` | Use encrypted DNS queries for improved reliability and privacy. | boolean | `true` |
+| `USING_TOR` | Route all traffic through Tor for enhanced privacy. Requires root startup. | boolean | `false` |
+| `PROXY_MODE` | Choose proxy type. SOCKS5 handles all traffic through a single proxy. | string (choice) | `none` |
+| `HTTP_PROXY` | HTTP proxy URL (e.g., http://proxy:8080) | string | _none_ |
+| `HTTPS_PROXY` | HTTPS proxy URL (leave empty to use HTTP proxy for HTTPS) | string | _none_ |
+| `SOCKS5_PROXY` | SOCKS5 proxy URL. Supports auth: socks5://user:pass@host:port | string | _none_ |
+| `NO_PROXY` | Comma-separated hosts to bypass proxy (e.g., localhost,127.0.0.1,10.*,*.local) | string | _none_ |
+
+<details>
+<summary>Detailed descriptions</summary>
+
+#### `CERTIFICATE_VALIDATION`
+
+**Certificate Validation**
+
+Controls SSL/TLS certificate verification for outbound connections. Disable for self-signed certificates on internal services (e.g. OIDC providers, Prowlarr).
+
+- **Type:** string (choice)
+- **Default:** `enabled`
+- **Options:** `enabled` (Enabled (Recommended)), `disabled_local` (Disabled for Local Addresses), `disabled` (Disabled)
+
+#### `CUSTOM_DNS`
+
+**DNS Provider**
+
+DNS provider for domain resolution. 'Auto' rotates through providers on failure.
+
+- **Type:** string (choice)
+- **Default:** `auto`
+- **Options:** `auto` (Auto (Recommended)), `system` (System), `google` (Google), `cloudflare` (Cloudflare), `quad9` (Quad9), `opendns` (OpenDNS), `manual` (Manual)
+
+#### `CUSTOM_DNS_MANUAL`
+
+**Manual DNS Servers**
+
+Comma-separated list of DNS server IP addresses (e.g., 8.8.8.8, 1.1.1.1).
+
+- **Type:** string
+- **Default:** _none_
+
+#### `USE_DOH`
+
+**Use DNS over HTTPS**
+
+Use encrypted DNS queries for improved reliability and privacy.
+
+- **Type:** boolean
+- **Default:** `true`
+
+#### `USING_TOR`
+
+**Tor Routing**
+
+Route all traffic through Tor for enhanced privacy. Requires root startup.
+
+- **Type:** boolean
+- **Default:** `false`
+
+#### `PROXY_MODE`
+
+**Proxy Mode**
+
+Choose proxy type. SOCKS5 handles all traffic through a single proxy.
+
+- **Type:** string (choice)
+- **Default:** `none`
+- **Options:** `none` (None (Direct Connection)), `http` (HTTP/HTTPS Proxy), `socks5` (SOCKS5 Proxy)
+
+#### `HTTP_PROXY`
+
+**HTTP Proxy**
+
+HTTP proxy URL (e.g., http://proxy:8080)
+
+- **Type:** string
+- **Default:** _none_
+
+#### `HTTPS_PROXY`
+
+**HTTPS Proxy**
+
+HTTPS proxy URL (leave empty to use HTTP proxy for HTTPS)
+
+- **Type:** string
+- **Default:** _none_
+
+#### `SOCKS5_PROXY`
+
+**SOCKS5 Proxy**
+
+SOCKS5 proxy URL. Supports auth: socks5://user:pass@host:port
+
+- **Type:** string
+- **Default:** _none_
+
+#### `NO_PROXY`
+
+**No Proxy**
+
+Comma-separated hosts to bypass proxy (e.g., localhost,127.0.0.1,10.*,*.local)
+
+- **Type:** string
+- **Default:** _none_
+
+</details>
+
+## Trending-boeken
+
+| Variable | Description | Type | Default |
+|----------|-------------|------|---------|
+| `BESTSELLER_ENABLED` | Werk de Nederlandse Bestseller 60 automatisch bij en toon deze als Trending. | boolean | `true` |
+| `BESTSELLER_CHECK_INTERVAL_HOURS` | Hoe vaak BookFlow op een nieuwe Bestseller 60-week controleert. | number | `24` |
+
+<details>
+<summary>Detailed descriptions</summary>
+
+#### `BESTSELLER_ENABLED`
+
+**Trending-boeken inschakelen**
+
+Werk de Nederlandse Bestseller 60 automatisch bij en toon deze als Trending.
+
+- **Type:** boolean
+- **Default:** `true`
+
+#### `BESTSELLER_CHECK_INTERVAL_HOURS`
+
+**Controle-interval (uren)**
+
+Hoe vaak BookFlow op een nieuwe Bestseller 60-week controleert.
+
+- **Type:** number
+- **Default:** `24`
+- **Constraints:** min: 1, max: 168
+
+</details>
+
+## Advanced
+
+| Variable | Description | Type | Default |
+|----------|-------------|------|---------|
+| `URL_BASE` | Optional URL path prefix. Use a path like /bookflow (no hostname). Leave blank for root. | string | _none_ |
+| `DEBUG` | Enable verbose logging to console and file. Not recommended for normal use. | boolean | `false` |
+| `MAIN_LOOP_SLEEP_TIME` | How often the download queue is checked for new items. | number | `5` |
+| `DOWNLOAD_PROGRESS_UPDATE_INTERVAL` | How often download progress is broadcast to the UI. | number | `1` |
+| `CUSTOM_SCRIPT` | Path to a script to run after each successful download. Must be executable. | string | _none_ |
+| `CUSTOM_SCRIPT_PATH_MODE` | Pass the path to the custom script as an absolute path or relative to the destination folder. | string (choice) | `absolute` |
+| `CUSTOM_SCRIPT_JSON_PAYLOAD` | Send a JSON payload to the script via stdin. Useful for multi-file imports or richer metadata without relying on path parsing. | boolean | `false` |
+| `DOWNLOAD_CLIENT_COMPLETED_PATH_TIMEOUT` | How long to wait after a torrent or usenet client reports completion for the completed file path to become visible to BookFlow. Increase this for seedbox or remote-sync workflows. | number | `60` |
+| `COVERS_CACHE_ENABLED` | Cache book covers on the server for faster loading. | boolean | `true` |
+| `COVERS_CACHE_TTL` | How long to keep cached covers. Set to 0 to keep forever (recommended for static artwork). | number | `0` |
+| `COVERS_CACHE_MAX_SIZE_MB` | Maximum disk space for cached covers. Oldest images are removed when limit is reached. | number | `500` |
+| `METADATA_CACHE_ENABLED` | When disabled, all metadata searches hit the provider API directly. | boolean | `true` |
+| `METADATA_CACHE_SEARCH_TTL` | How long to cache search results. Default: 300 (5 minutes). Max: 604800 (7 days). | number | `300` |
+| `METADATA_CACHE_BOOK_TTL` | How long to cache individual book details. Default: 600 (10 minutes). Max: 604800 (7 days). | number | `600` |
+
+<details>
+<summary>Detailed descriptions</summary>
+
+#### `URL_BASE`
+
+**Base Path**
+
+Optional URL path prefix. Use a path like /bookflow (no hostname). Leave blank for root.
+
+- **Type:** string
+- **Default:** _none_
+- **Requires restart:** Yes
+
+#### `DEBUG`
+
+**Debug Mode**
+
+Enable verbose logging to console and file. Not recommended for normal use.
+
+- **Type:** boolean
+- **Default:** `false`
+- **Requires restart:** Yes
+
+#### `MAIN_LOOP_SLEEP_TIME`
+
+**Queue Check Interval (seconds)**
+
+How often the download queue is checked for new items.
+
+- **Type:** number
+- **Default:** `5`
+- **Requires restart:** Yes
+- **Constraints:** min: 1, max: 60
+
+#### `DOWNLOAD_PROGRESS_UPDATE_INTERVAL`
+
+**Progress Update Interval (seconds)**
+
+How often download progress is broadcast to the UI.
+
+- **Type:** number
+- **Default:** `1`
+- **Requires restart:** Yes
+- **Constraints:** min: 1, max: 10
+
+#### `CUSTOM_SCRIPT`
+
+**Custom Script Path**
+
+Path to a script to run after each successful download. Must be executable.
+
+- **Type:** string
+- **Default:** _none_
+
+#### `CUSTOM_SCRIPT_PATH_MODE`
+
+**Custom Script Path Mode**
+
+Pass the path to the custom script as an absolute path or relative to the destination folder.
+
+- **Type:** string (choice)
+- **Default:** `absolute`
+- **Options:** `absolute` (Absolute), `relative` (Relative)
+
+#### `CUSTOM_SCRIPT_JSON_PAYLOAD`
+
+**Custom Script JSON Payload**
+
+Send a JSON payload to the script via stdin. Useful for multi-file imports or richer metadata without relying on path parsing.
+
+- **Type:** boolean
+- **Default:** `false`
+
+#### `DOWNLOAD_CLIENT_COMPLETED_PATH_TIMEOUT`
+
+**Completed Path Wait (seconds)**
+
+How long to wait after a torrent or usenet client reports completion for the completed file path to become visible to BookFlow. Increase this for seedbox or remote-sync workflows.
+
+- **Type:** number
+- **Default:** `60`
+- **Constraints:** min: 0, max: 3600
+
+#### `COVERS_CACHE_ENABLED`
+
+**Enable Cover Cache**
+
+Cache book covers on the server for faster loading.
+
+- **Type:** boolean
+- **Default:** `true`
+
+#### `COVERS_CACHE_TTL`
+
+**Cache TTL (days)**
+
+How long to keep cached covers. Set to 0 to keep forever (recommended for static artwork).
+
+- **Type:** number
+- **Default:** `0`
+- **Constraints:** min: 0, max: 365
+
+#### `COVERS_CACHE_MAX_SIZE_MB`
+
+**Max Cache Size (MB)**
+
+Maximum disk space for cached covers. Oldest images are removed when limit is reached.
+
+- **Type:** number
+- **Default:** `500`
+- **Constraints:** min: 50, max: 5000
+
+#### `METADATA_CACHE_ENABLED`
+
+**Enable Metadata Caching**
+
+When disabled, all metadata searches hit the provider API directly.
+
+- **Type:** boolean
+- **Default:** `true`
+
+#### `METADATA_CACHE_SEARCH_TTL`
+
+**Search Results Cache (seconds)**
+
+How long to cache search results. Default: 300 (5 minutes). Max: 604800 (7 days).
+
+- **Type:** number
+- **Default:** `300`
+- **Constraints:** min: 60, max: 604800
+
+#### `METADATA_CACHE_BOOK_TTL`
+
+**Book Details Cache (seconds)**
+
+How long to cache individual book details. Default: 600 (10 minutes). Max: 604800 (7 days).
+
+- **Type:** number
+- **Default:** `600`
+- **Constraints:** min: 60, max: 604800
+
+</details>
+
+## Prowlarr
+
+| Variable | Description | Type | Default |
+|----------|-------------|------|---------|
+| `PROWLARR_ENABLED` | Enable searching for books via Prowlarr indexers | boolean | `false` |
+| `PROWLARR_URL` | Base URL of your Prowlarr instance | string | _none_ |
+| `PROWLARR_API_KEY` | Found in Prowlarr: Settings > General > API Key | string (secret) | _none_ |
+| `PROWLARR_INDEXERS` | Select which indexers to search. 📚 = has book categories. Leave empty to search all. | string (comma-separated) | _empty list_ |
+| `PROWLARR_AUTO_EXPAND` | Automatically retry search without category filtering if no results are found | boolean | `false` |
+| `PROWLARR_USE_SEED_PREFERENCES` | Apply per-indexer seed time and ratio preferences from Prowlarr when sending torrents to the download client | boolean | `false` |
+
+<details>
+<summary>Detailed descriptions</summary>
+
+#### `PROWLARR_ENABLED`
+
+**Enable Prowlarr source**
+
+Enable searching for books via Prowlarr indexers
+
+- **Type:** boolean
+- **Default:** `false`
+
+#### `PROWLARR_URL`
+
+**Prowlarr URL**
+
+Base URL of your Prowlarr instance
+
+- **Type:** string
+- **Default:** _none_
+- **Required:** Yes
+
+#### `PROWLARR_API_KEY`
+
+**API Key**
+
+Found in Prowlarr: Settings > General > API Key
+
+- **Type:** string (secret)
+- **Default:** _none_
+- **Required:** Yes
+
+#### `PROWLARR_INDEXERS`
+
+**Indexers to Search**
+
+Select which indexers to search. 📚 = has book categories. Leave empty to search all.
+
+- **Type:** string (comma-separated)
+- **Default:** _empty list_
+
+#### `PROWLARR_AUTO_EXPAND`
+
+**Auto-expand search on no results**
+
+Automatically retry search without category filtering if no results are found
+
+- **Type:** boolean
+- **Default:** `false`
+
+#### `PROWLARR_USE_SEED_PREFERENCES`
+
+**Use Prowlarr seed preferences**
+
+Apply per-indexer seed time and ratio preferences from Prowlarr when sending torrents to the download client
+
+- **Type:** boolean
+- **Default:** `false`
+
+</details>
+
+## Newznab
+
+| Variable | Description | Type | Default |
+|----------|-------------|------|---------|
+| `NEWZNAB_ENABLED` | Enable searching for books via a Newznab-compatible indexer | boolean | `false` |
+| `NEWZNAB_URL` | Base URL of your Newznab indexer or aggregator | string | _none_ |
+| `NEWZNAB_API_KEY` | Your Newznab API key (leave blank if not required) | string (secret) | _none_ |
+| `NEWZNAB_AUTO_EXPAND` | Automatically retry search without category filtering if no results are found | boolean | `false` |
+
+<details>
+<summary>Detailed descriptions</summary>
+
+#### `NEWZNAB_ENABLED`
+
+**Enable Newznab source**
+
+Enable searching for books via a Newznab-compatible indexer
+
+- **Type:** boolean
+- **Default:** `false`
+
+#### `NEWZNAB_URL`
+
+**Newznab URL**
+
+Base URL of your Newznab indexer or aggregator
+
+- **Type:** string
+- **Default:** _none_
+- **Required:** Yes
+
+#### `NEWZNAB_API_KEY`
+
+**API Key**
+
+Your Newznab API key (leave blank if not required)
+
+- **Type:** string (secret)
+- **Default:** _none_
+
+#### `NEWZNAB_AUTO_EXPAND`
+
+**Auto-expand search on no results**
+
+Automatically retry search without category filtering if no results are found
+
+- **Type:** boolean
+- **Default:** `false`
+
+</details>
+
+## IRC
+
+| Variable | Description | Type | Default |
+|----------|-------------|------|---------|
+| `IRC_SERVER` | IRC server hostname | string | _none_ |
+| `IRC_PORT` | IRC server port (usually 6697 for TLS, 6667 for plain) | number | `6697` |
+| `IRC_USE_TLS` | Enable TLS/SSL encryption for the IRC connection. Disable for servers that don't support TLS. | boolean | `true` |
+| `IRC_CHANNEL` | Channel name without the # prefix | string | _none_ |
+| `IRC_NICK` | Your IRC nickname (required). Must be unique on the IRC network. | string | _none_ |
+| `IRC_SEARCH_BOT` | The search bot to address queries to (required). Searches are sent as "@<bot> <query>". | string | _none_ |
+| `IRC_CACHE_TTL` | How long to keep cached search results before they expire. | string (choice) | `2592000` |
+
+<details>
+<summary>Detailed descriptions</summary>
+
+#### `IRC_SERVER`
+
+**Server**
+
+IRC server hostname
+
+- **Type:** string
+- **Default:** _none_
+- **Required:** Yes
+
+#### `IRC_PORT`
+
+**Port**
+
+IRC server port (usually 6697 for TLS, 6667 for plain)
+
+- **Type:** number
+- **Default:** `6697`
+
+#### `IRC_USE_TLS`
+
+**Use TLS**
+
+Enable TLS/SSL encryption for the IRC connection. Disable for servers that don't support TLS.
+
+- **Type:** boolean
+- **Default:** `true`
+
+#### `IRC_CHANNEL`
+
+**Channel**
+
+Channel name without the # prefix
+
+- **Type:** string
+- **Default:** _none_
+- **Required:** Yes
+
+#### `IRC_NICK`
+
+**Nickname**
+
+Your IRC nickname (required). Must be unique on the IRC network.
+
+- **Type:** string
+- **Default:** _none_
+- **Required:** Yes
+
+#### `IRC_SEARCH_BOT`
+
+**Search bot**
+
+The search bot to address queries to (required). Searches are sent as "@<bot> <query>".
+
+- **Type:** string
+- **Default:** _none_
+- **Required:** Yes
+
+#### `IRC_CACHE_TTL`
+
+**Cache Duration**
+
+How long to keep cached search results before they expire.
+
+- **Type:** string (choice)
+- **Default:** `2592000`
+- **Options:** `2592000` (30 days), `0` (Forever (until manually cleared))
+
+</details>
+
+## Download Clients
+
+| Variable | Description | Type | Default |
+|----------|-------------|------|---------|
+| `PROWLARR_TORRENT_CLIENT` | Choose which torrent client to use | string (choice) | _empty string_ |
+| `QBITTORRENT_URL` | Web UI URL of your qBittorrent instance | string | _none_ |
+| `QBITTORRENT_USERNAME` | qBittorrent Web UI username | string | _none_ |
+| `QBITTORRENT_PASSWORD` | qBittorrent Web UI password | string (secret) | _none_ |
+| `QBITTORRENT_CATEGORY` | Category to assign to book downloads in qBittorrent | string | `books` |
+| `QBITTORRENT_DOWNLOAD_DIR` | Server-side directory where torrents are downloaded (optional, uses qBittorrent default if not specified) | string | _none_ |
+| `QBITTORRENT_TAG` | Tag(s) to assign to qBittorrent downloads. Leave empty for no tags. | string (comma-separated) | _empty list_ |
+| `TRANSMISSION_URL` | URL of your Transmission instance (use https:// for TLS) | string | _none_ |
+| `TRANSMISSION_USERNAME` | Transmission RPC username (if authentication enabled) | string | _none_ |
+| `TRANSMISSION_PASSWORD` | Transmission RPC password | string (secret) | _none_ |
+| `TRANSMISSION_CATEGORY` | Label to assign to book downloads in Transmission | string | `books` |
+| `TRANSMISSION_DOWNLOAD_DIR` | Server-side directory where torrents are downloaded (optional, uses Transmission default if not specified) | string | _none_ |
+| `DELUGE_HOST` | Hostname/IP or full URL of your Deluge Web UI (deluge-web) | string | `localhost` |
+| `DELUGE_PORT` | Deluge Web UI port (default: 8112) | string | `8112` |
+| `DELUGE_PASSWORD` | Deluge Web UI password (default: deluge) | string (secret) | _none_ |
+| `DELUGE_CATEGORY` | Label to assign to book downloads in Deluge | string | `books` |
+| `DELUGE_DOWNLOAD_DIR` | Server-side directory where torrents are downloaded (optional, uses Deluge default if not specified) | string | _none_ |
+| `RTORRENT_URL` | XML-RPC URL of your rTorrent instance | string | _none_ |
+| `RTORRENT_USERNAME` | HTTP Basic auth username (if authentication enabled) | string | _none_ |
+| `RTORRENT_PASSWORD` | HTTP Basic auth password | string (secret) | _none_ |
+| `RTORRENT_LABEL` | Label to assign to ebook downloads in rTorrent | string | `cwabd` |
+| `RTORRENT_DOWNLOAD_DIR` | Server-side directory where torrents are downloaded (optional, uses rTorrent default if not specified) | string | _none_ |
+| `PROWLARR_TORRENT_ACTION` | Remove deletes the torrent from your client immediately after import (stops seeding, files are kept); Keep leaves it in the client to continue seeding | string (choice) | `keep` |
+| `PROWLARR_USENET_CLIENT` | Choose which usenet client to use | string (choice) | _empty string_ |
+| `NZBGET_URL` | URL of your NZBGet instance | string | _none_ |
+| `NZBGET_USERNAME` | NZBGet control username | string | `nzbget` |
+| `NZBGET_PASSWORD` | NZBGet control password | string (secret) | _none_ |
+| `NZBGET_CATEGORY` | Category to assign to book downloads in NZBGet | string | `Books` |
+| `SABNZBD_URL` | URL of your SABnzbd instance | string | _none_ |
+| `SABNZBD_API_KEY` | Found in SABnzbd: Config > General > API Key | string (secret) | _none_ |
+| `SABNZBD_CATEGORY` | Category to assign to book downloads in SABnzbd | string | `books` |
+| `PROWLARR_USENET_ACTION` | Move deletes the job from your usenet client after import; Copy keeps it in the client | string (choice) | `move` |
+
+<details>
+<summary>Detailed descriptions</summary>
+
+#### `PROWLARR_TORRENT_CLIENT`
+
+**Torrent Client**
+
+Choose which torrent client to use
+
+- **Type:** string (choice)
+- **Default:** _empty string_
+- **Options:** `""` (None), `qbittorrent` (qBittorrent), `transmission` (Transmission), `deluge` (Deluge), `rtorrent` (rTorrent)
+
+#### `QBITTORRENT_URL`
+
+**qBittorrent URL**
+
+Web UI URL of your qBittorrent instance
+
+- **Type:** string
+- **Default:** _none_
+
+#### `QBITTORRENT_USERNAME`
+
+**Username**
+
+qBittorrent Web UI username
+
+- **Type:** string
+- **Default:** _none_
+
+#### `QBITTORRENT_PASSWORD`
+
+**Password**
+
+qBittorrent Web UI password
+
+- **Type:** string (secret)
+- **Default:** _none_
+
+#### `QBITTORRENT_CATEGORY`
+
+**Book Category**
+
+Category to assign to book downloads in qBittorrent
+
+- **Type:** string
+- **Default:** `books`
+
+#### `QBITTORRENT_DOWNLOAD_DIR`
+
+**Download Directory**
+
+Server-side directory where torrents are downloaded (optional, uses qBittorrent default if not specified)
+
+- **Type:** string
+- **Default:** _none_
+
+#### `QBITTORRENT_TAG`
+
+**Tags**
+
+Tag(s) to assign to qBittorrent downloads. Leave empty for no tags.
+
+- **Type:** string (comma-separated)
+- **Default:** _empty list_
+
+#### `TRANSMISSION_URL`
+
+**Transmission URL**
+
+URL of your Transmission instance (use https:// for TLS)
+
+- **Type:** string
+- **Default:** _none_
+
+#### `TRANSMISSION_USERNAME`
+
+**Username**
+
+Transmission RPC username (if authentication enabled)
+
+- **Type:** string
+- **Default:** _none_
+
+#### `TRANSMISSION_PASSWORD`
+
+**Password**
+
+Transmission RPC password
+
+- **Type:** string (secret)
+- **Default:** _none_
+
+#### `TRANSMISSION_CATEGORY`
+
+**Book Label**
+
+Label to assign to book downloads in Transmission
+
+- **Type:** string
+- **Default:** `books`
+
+#### `TRANSMISSION_DOWNLOAD_DIR`
+
+**Download Directory**
+
+Server-side directory where torrents are downloaded (optional, uses Transmission default if not specified)
+
+- **Type:** string
+- **Default:** _none_
+
+#### `DELUGE_HOST`
+
+**Deluge Web UI Host/URL**
+
+Hostname/IP or full URL of your Deluge Web UI (deluge-web)
+
+- **Type:** string
+- **Default:** `localhost`
+
+#### `DELUGE_PORT`
+
+**Deluge Web UI Port**
+
+Deluge Web UI port (default: 8112)
+
+- **Type:** string
+- **Default:** `8112`
+
+#### `DELUGE_PASSWORD`
+
+**Password**
+
+Deluge Web UI password (default: deluge)
+
+- **Type:** string (secret)
+- **Default:** _none_
+
+#### `DELUGE_CATEGORY`
+
+**Book Label**
+
+Label to assign to book downloads in Deluge
+
+- **Type:** string
+- **Default:** `books`
+
+#### `DELUGE_DOWNLOAD_DIR`
+
+**Download Directory**
+
+Server-side directory where torrents are downloaded (optional, uses Deluge default if not specified)
+
+- **Type:** string
+- **Default:** _none_
+
+#### `RTORRENT_URL`
+
+**rTorrent URL**
+
+XML-RPC URL of your rTorrent instance
+
+- **Type:** string
+- **Default:** _none_
+
+#### `RTORRENT_USERNAME`
+
+**Username**
+
+HTTP Basic auth username (if authentication enabled)
+
+- **Type:** string
+- **Default:** _none_
+
+#### `RTORRENT_PASSWORD`
+
+**Password**
+
+HTTP Basic auth password
+
+- **Type:** string (secret)
+- **Default:** _none_
+
+#### `RTORRENT_LABEL`
+
+**Book Label**
+
+Label to assign to ebook downloads in rTorrent
+
+- **Type:** string
+- **Default:** `cwabd`
+
+#### `RTORRENT_DOWNLOAD_DIR`
+
+**Download Directory**
+
+Server-side directory where torrents are downloaded (optional, uses rTorrent default if not specified)
+
+- **Type:** string
+- **Default:** _none_
+
+#### `PROWLARR_TORRENT_ACTION`
+
+**Torrent Completion Action**
+
+Remove deletes the torrent from your client immediately after import (stops seeding, files are kept); Keep leaves it in the client to continue seeding
+
+- **Type:** string (choice)
+- **Default:** `keep`
+- **Options:** `keep` (Keep), `remove` (Remove)
+
+#### `PROWLARR_USENET_CLIENT`
+
+**Usenet Client**
+
+Choose which usenet client to use
+
+- **Type:** string (choice)
+- **Default:** _empty string_
+- **Options:** `""` (None), `nzbget` (NZBGet), `sabnzbd` (SABnzbd)
+
+#### `NZBGET_URL`
+
+**NZBGet URL**
+
+URL of your NZBGet instance
+
+- **Type:** string
+- **Default:** _none_
+
+#### `NZBGET_USERNAME`
+
+**Username**
+
+NZBGet control username
+
+- **Type:** string
+- **Default:** `nzbget`
+
+#### `NZBGET_PASSWORD`
+
+**Password**
+
+NZBGet control password
+
+- **Type:** string (secret)
+- **Default:** _none_
+
+#### `NZBGET_CATEGORY`
+
+**Book Category**
+
+Category to assign to book downloads in NZBGet
+
+- **Type:** string
+- **Default:** `Books`
+
+#### `SABNZBD_URL`
+
+**SABnzbd URL**
+
+URL of your SABnzbd instance
+
+- **Type:** string
+- **Default:** _none_
+
+#### `SABNZBD_API_KEY`
+
+**API Key**
+
+Found in SABnzbd: Config > General > API Key
+
+- **Type:** string (secret)
+- **Default:** _none_
+
+#### `SABNZBD_CATEGORY`
+
+**Book Category**
+
+Category to assign to book downloads in SABnzbd
+
+- **Type:** string
+- **Default:** `books`
+
+#### `PROWLARR_USENET_ACTION`
+
+**NZB Completion Action**
+
+Move deletes the job from your usenet client after import; Copy keeps it in the client
+
+- **Type:** string (choice)
+- **Default:** `move`
+- **Options:** `move` (Move), `copy` (Copy)
+
+</details>
+
+## Metadata Providers
+
+### Metadata Providers: Hardcover
+
+| Variable | Description | Type | Default |
+|----------|-------------|------|---------|
+| `HARDCOVER_ENABLED` | Enable Hardcover as a metadata provider for book searches | boolean | `false` |
+| `HARDCOVER_API_KEY` | Get your API key from hardcover.app/account/api | string (secret) | _none_ |
+| `HARDCOVER_DEFAULT_SORT` | Default sort order for Hardcover search results. | string (choice) | `relevance` |
+| `HARDCOVER_EXCLUDE_COMPILATIONS` | Filter out compilations, anthologies, and omnibus editions from search results | boolean | `false` |
+| `HARDCOVER_EXCLUDE_UNRELEASED` | Filter out books with a release year in the future | boolean | `false` |
+| `HARDCOVER_AUTO_REMOVE_ON_DOWNLOAD` | Automatically remove a book from the active Hardcover list when you download it | boolean | `true` |
+
+<details>
+<summary>Detailed descriptions</summary>
+
+#### `HARDCOVER_ENABLED`
+
+**Enable Hardcover**
+
+Enable Hardcover as a metadata provider for book searches
+
+- **Type:** boolean
+- **Default:** `false`
+
+#### `HARDCOVER_API_KEY`
+
+**API Key**
+
+Get your API key from hardcover.app/account/api
+
+- **Type:** string (secret)
+- **Default:** _none_
+- **Required:** Yes
+
+#### `HARDCOVER_DEFAULT_SORT`
+
+**Default Sort Order**
+
+Default sort order for Hardcover search results.
+
+- **Type:** string (choice)
+- **Default:** `relevance`
+- **Options:** `relevance` (Most relevant), `popularity` (Most popular), `rating` (Highest rated), `newest` (Newest), `oldest` (Oldest)
+
+#### `HARDCOVER_EXCLUDE_COMPILATIONS`
+
+**Exclude Compilations**
+
+Filter out compilations, anthologies, and omnibus editions from search results
+
+- **Type:** boolean
+- **Default:** `false`
+
+#### `HARDCOVER_EXCLUDE_UNRELEASED`
+
+**Exclude Unreleased Books**
+
+Filter out books with a release year in the future
+
+- **Type:** boolean
+- **Default:** `false`
+
+#### `HARDCOVER_AUTO_REMOVE_ON_DOWNLOAD`
+
+**Auto-Remove from List on Download**
+
+Automatically remove a book from the active Hardcover list when you download it
+
+- **Type:** boolean
+- **Default:** `true`
+
+</details>
+
+### Metadata Providers: Open Library
+
+| Variable | Description | Type | Default |
+|----------|-------------|------|---------|
+| `OPENLIBRARY_ENABLED` | Enable Open Library as a metadata provider for book searches | boolean | `false` |
+| `OPENLIBRARY_DEFAULT_SORT` | Default sort order for Open Library search results. | string (choice) | `relevance` |
+
+<details>
+<summary>Detailed descriptions</summary>
+
+#### `OPENLIBRARY_ENABLED`
+
+**Enable Open Library**
+
+Enable Open Library as a metadata provider for book searches
+
+- **Type:** boolean
+- **Default:** `false`
+
+#### `OPENLIBRARY_DEFAULT_SORT`
+
+**Default Sort Order**
+
+Default sort order for Open Library search results.
+
+- **Type:** string (choice)
+- **Default:** `relevance`
+- **Options:** `relevance` (Most relevant), `newest` (Newest), `oldest` (Oldest)
+
+</details>
+
+### Metadata Providers: Google Books
+
+| Variable | Description | Type | Default |
+|----------|-------------|------|---------|
+| `GOOGLEBOOKS_ENABLED` | Enable Google Books as a metadata provider for book searches | boolean | `false` |
+| `GOOGLEBOOKS_API_KEY` | Get your API key from Google Cloud Console (APIs & Services > Credentials) | string (secret) | _none_ |
+| `GOOGLEBOOKS_DEFAULT_SORT` | Default sort order for Google Books search results. | string (choice) | `relevance` |
+
+<details>
+<summary>Detailed descriptions</summary>
+
+#### `GOOGLEBOOKS_ENABLED`
+
+**Enable Google Books**
+
+Enable Google Books as a metadata provider for book searches
+
+- **Type:** boolean
+- **Default:** `false`
+
+#### `GOOGLEBOOKS_API_KEY`
+
+**API Key**
+
+Get your API key from Google Cloud Console (APIs & Services > Credentials)
+
+- **Type:** string (secret)
+- **Default:** _none_
+- **Required:** Yes
+
+#### `GOOGLEBOOKS_DEFAULT_SORT`
+
+**Default Sort Order**
+
+Default sort order for Google Books search results.
+
+- **Type:** string (choice)
+- **Default:** `relevance`
+- **Options:** `relevance` (Most relevant), `newest` (Newest)
+
+</details>
+
+### Metadata Providers: KB Nederlandse Bibliografie
+
+| Variable | Description | Type | Default |
+|----------|-------------|------|---------|
+| `KB_NBT_ENABLED` | Use the public KB bibliography for Dutch book searches and ISBN lookup. | boolean | `false` |
+
+<details>
+<summary>Detailed descriptions</summary>
+
+#### `KB_NBT_ENABLED`
+
+**Enable KB Nederlandse Bibliografie**
+
+Use the public KB bibliography for Dutch book searches and ISBN lookup.
+
+- **Type:** boolean
+- **Default:** `false`
+
+</details>
+
+### Metadata Providers: DBNL
+
+| Variable | Description | Type | Default |
+|----------|-------------|------|---------|
+| `DBNL_ENABLED` | Use DBNL as a specialist metadata provider for Dutch literature. | boolean | `false` |
+
+<details>
+<summary>Detailed descriptions</summary>
+
+#### `DBNL_ENABLED`
+
+**Enable DBNL**
+
+Use DBNL as a specialist metadata provider for Dutch literature.
+
+- **Type:** boolean
+- **Default:** `false`
+
+</details>
+
+### Metadata Providers: Apple Books
+
+| Variable | Description | Type | Default |
+|----------|-------------|------|---------|
+| `APPLEBOOKS_ENABLED` | Use Apple Books as a metadata provider | boolean | `false` |
+
+<details>
+<summary>Detailed descriptions</summary>
+
+#### `APPLEBOOKS_ENABLED`
+
+**Enable Apple Books**
+
+Use Apple Books as a metadata provider
+
+- **Type:** boolean
+- **Default:** `false`
+
+</details>
+
+## Direct Download
+
+### Direct Download: Download Sources
+
+| Variable | Description | Type | Default |
+|----------|-------------|------|---------|
+| `DIRECT_DOWNLOAD_ENABLED` | Show Direct Download in release-source lists and allow Direct mode searches. Add your own mirror URLs in the Mirrors tab before using it. | boolean | `false` |
+| `DIRECT_DOWNLOAD_LANGUAGE_FROM_PATH` | When language metadata is missing or unknown, parse the distant path (file path shown in search results) for language tags like [BD FR] or [En]. Also enables local language filtering so lgli files without AA language metadata are not excluded before the distant path can be checked. | boolean | `false` |
+| `AA_DONATOR_KEY` | Enables fast download access on AA. Get this from your donator account page. | string (secret) | _none_ |
+| `FAST_SOURCES_DISPLAY` | Always tried first, no waiting or bypass required. | JSON array | _see UI for defaults_ |
+| `SOURCE_PRIORITY` | Fallback sources, may have waiting. Requires bypasser. Drag to reorder. | JSON array | _see UI for defaults_ |
+| `MAX_RETRY` | Maximum retry attempts for failed downloads. | number | `10` |
+| `DEFAULT_SLEEP` | Wait time between download retry attempts. | number | `5` |
+| `AA_CONTENT_TYPE_ROUTING` | Override destination based on content type metadata. | boolean | `false` |
+| `AA_CONTENT_TYPE_DIR_FICTION` | Fiction Books | string | _none_ |
+| `AA_CONTENT_TYPE_DIR_NON_FICTION` | Non-Fiction Books | string | _none_ |
+| `AA_CONTENT_TYPE_DIR_UNKNOWN` | Unknown Books | string | _none_ |
+| `AA_CONTENT_TYPE_DIR_MAGAZINE` | Magazines | string | _none_ |
+| `AA_CONTENT_TYPE_DIR_COMIC` | Comic Books | string | _none_ |
+| `AA_CONTENT_TYPE_DIR_STANDARDS` | Standards Documents | string | _none_ |
+| `AA_CONTENT_TYPE_DIR_MUSICAL_SCORE` | Musical Scores | string | _none_ |
+| `AA_CONTENT_TYPE_DIR_OTHER` | Other | string | _none_ |
+
+<details>
+<summary>Detailed descriptions</summary>
+
+#### `DIRECT_DOWNLOAD_ENABLED`
+
+**Enable Direct Download Source**
+
+Show Direct Download in release-source lists and allow Direct mode searches. Add your own mirror URLs in the Mirrors tab before using it.
+
+- **Type:** boolean
+- **Default:** `false`
+
+#### `DIRECT_DOWNLOAD_LANGUAGE_FROM_PATH`
+
+**Detect Language From Distant Path**
+
+When language metadata is missing or unknown, parse the distant path (file path shown in search results) for language tags like [BD FR] or [En]. Also enables local language filtering so lgli files without AA language metadata are not excluded before the distant path can be checked.
+
+- **Type:** boolean
+- **Default:** `false`
+
+#### `AA_DONATOR_KEY`
+
+**Account Donator Key**
+
+Enables fast download access on AA. Get this from your donator account page.
+
+- **Type:** string (secret)
+- **Default:** _none_
+
+#### `FAST_SOURCES_DISPLAY`
+
+**Fast downloads**
+
+Always tried first, no waiting or bypass required.
+
+- **Type:** JSON array
+- **Default:** _see UI for defaults_
+
+#### `SOURCE_PRIORITY`
+
+**Slow downloads**
+
+Fallback sources, may have waiting. Requires bypasser. Drag to reorder.
+
+- **Type:** JSON array
+- **Default:** _see UI for defaults_
+
+#### `MAX_RETRY`
+
+**Max Retries**
+
+Maximum retry attempts for failed downloads.
+
+- **Type:** number
+- **Default:** `10`
+- **Constraints:** min: 1, max: 50
+
+#### `DEFAULT_SLEEP`
+
+**Retry Delay (seconds)**
+
+Wait time between download retry attempts.
+
+- **Type:** number
+- **Default:** `5`
+- **Constraints:** min: 1, max: 60
+
+#### `AA_CONTENT_TYPE_ROUTING`
+
+**Enable Content-Type Routing**
+
+Override destination based on content type metadata.
+
+- **Type:** boolean
+- **Default:** `false`
+
+#### `AA_CONTENT_TYPE_DIR_FICTION`
+
+**Fiction Books**
+
+- **Type:** string
+- **Default:** _none_
+
+#### `AA_CONTENT_TYPE_DIR_NON_FICTION`
+
+**Non-Fiction Books**
+
+- **Type:** string
+- **Default:** _none_
+
+#### `AA_CONTENT_TYPE_DIR_UNKNOWN`
+
+**Unknown Books**
+
+- **Type:** string
+- **Default:** _none_
+
+#### `AA_CONTENT_TYPE_DIR_MAGAZINE`
+
+**Magazines**
+
+- **Type:** string
+- **Default:** _none_
+
+#### `AA_CONTENT_TYPE_DIR_COMIC`
+
+**Comic Books**
+
+- **Type:** string
+- **Default:** _none_
+
+#### `AA_CONTENT_TYPE_DIR_STANDARDS`
+
+**Standards Documents**
+
+- **Type:** string
+- **Default:** _none_
+
+#### `AA_CONTENT_TYPE_DIR_MUSICAL_SCORE`
+
+**Musical Scores**
+
+- **Type:** string
+- **Default:** _none_
+
+#### `AA_CONTENT_TYPE_DIR_OTHER`
+
+**Other**
+
+- **Type:** string
+- **Default:** _none_
+
+</details>
+
+### Direct Download: Cloudflare Bypass
+
+| Variable | Description | Type | Default |
+|----------|-------------|------|---------|
+| `USE_CF_BYPASS` | Attempt to bypass Cloudflare protection on download sites. | boolean | `true` |
+| `USING_EXTERNAL_BYPASSER` | Use FlareSolverr or similar external service instead of built-in bypasser. Caution: May have limitations with custom DNS, Tor and proxies. You may experience slower downloads and and poorer reliability compared to the internal bypasser. | boolean | `false` |
+| `EXT_BYPASSER_URL` | URL of the external bypasser service (e.g., FlareSolverr). | string | `http://flaresolverr:8191` |
+| `EXT_BYPASSER_PATH` | API path for the external bypasser. | string | `/v1` |
+| `EXT_BYPASSER_TIMEOUT` | Timeout for external bypasser requests in milliseconds. | number | `60000` |
+
+<details>
+<summary>Detailed descriptions</summary>
+
+#### `USE_CF_BYPASS`
+
+**Enable Cloudflare Bypass**
+
+Attempt to bypass Cloudflare protection on download sites.
+
+- **Type:** boolean
+- **Default:** `true`
+- **Requires restart:** Yes
+
+#### `USING_EXTERNAL_BYPASSER`
+
+**Use External Bypasser**
+
+Use FlareSolverr or similar external service instead of built-in bypasser. Caution: May have limitations with custom DNS, Tor and proxies. You may experience slower downloads and and poorer reliability compared to the internal bypasser.
+
+- **Type:** boolean
+- **Default:** `false`
+- **Requires restart:** Yes
+
+#### `EXT_BYPASSER_URL`
+
+**External Bypasser URL**
+
+URL of the external bypasser service (e.g., FlareSolverr).
+
+- **Type:** string
+- **Default:** `http://flaresolverr:8191`
+- **Requires restart:** Yes
+
+#### `EXT_BYPASSER_PATH`
+
+**External Bypasser Path**
+
+API path for the external bypasser.
+
+- **Type:** string
+- **Default:** `/v1`
+- **Requires restart:** Yes
+
+#### `EXT_BYPASSER_TIMEOUT`
+
+**External Bypasser Timeout (ms)**
+
+Timeout for external bypasser requests in milliseconds.
+
+- **Type:** number
+- **Default:** `60000`
+- **Requires restart:** Yes
+- **Constraints:** min: 10000, max: 300000
+
+</details>
+
+### Direct Download: Mirrors
+
+| Variable | Description | Type | Default |
+|----------|-------------|------|---------|
+| `AA_BASE_URL` | Select Auto to try mirrors from your list on startup and fail over on errors. Choosing a specific mirror pins BookFlow to that URL. | string (choice) | `auto` |
+| `AA_MIRROR_URLS` | List the Anna's Archive mirror URLs you want BookFlow to use. Type a URL and press Enter to add it. Order matters when Auto is selected. | string (comma-separated) | _empty list_ |
+| `LIBGEN_MIRROR_URLS` | Mirrors are tried in the order you add them until one works. | string (comma-separated) | _empty list_ |
+| `ZLIB_MIRROR_URLS` | Only the first mirror in the list is used. | string (comma-separated) | _empty list_ |
+| `WELIB_MIRROR_URLS` | Only the first mirror in the list is used. | string (comma-separated) | _empty list_ |
+
+<details>
+<summary>Detailed descriptions</summary>
+
+#### `AA_BASE_URL`
+
+**Primary Mirror**
+
+Select Auto to try mirrors from your list on startup and fail over on errors. Choosing a specific mirror pins BookFlow to that URL.
+
+- **Type:** string (choice)
+- **Default:** `auto`
+- **Options:** `auto` (Auto (Recommended))
+
+#### `AA_MIRROR_URLS`
+
+**Mirrors**
+
+List the Anna's Archive mirror URLs you want BookFlow to use. Type a URL and press Enter to add it. Order matters when Auto is selected.
+
+- **Type:** string (comma-separated)
+- **Default:** _empty list_
+
+#### `LIBGEN_MIRROR_URLS`
+
+**LibGen**
+
+Mirrors are tried in the order you add them until one works.
+
+- **Type:** string (comma-separated)
+- **Default:** _empty list_
+
+#### `ZLIB_MIRROR_URLS`
+
+**Z-Library**
+
+Only the first mirror in the list is used.
+
+- **Type:** string (comma-separated)
+- **Default:** _empty list_
+
+#### `WELIB_MIRROR_URLS`
+
+**Welib**
+
+Only the first mirror in the list is used.
+
+- **Type:** string (comma-separated)
+- **Default:** _empty list_
+
+</details>

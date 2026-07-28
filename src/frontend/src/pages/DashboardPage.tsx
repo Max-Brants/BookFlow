@@ -1,0 +1,156 @@
+import { useCallback, useState } from 'react';
+
+import { DashboardShelf, PosterCard, RequestCard } from '../components/dashboard';
+import { useLanguage } from '../contexts/LanguageContext';
+import { useDependencyEffect } from '../hooks/useMountEffect';
+import { v1Api } from '../services/v1Api';
+import type {
+  V1CatalogBook,
+  V1ReadingProgress,
+  V1SuggestionsResponse,
+  V1UserRequest,
+} from '../types/v1';
+import { catalogBookPath } from '../utils/catalogBookPath';
+import {
+  dashboardSuggestionLists,
+  loadDashboardData,
+  showOptionalDashboardShelf,
+  type DashboardSectionKey,
+} from './dashboardData';
+
+export const DashboardPage = () => {
+  const { t } = useLanguage();
+  const [recent, setRecent] = useState<V1CatalogBook[]>([]);
+  const [requests, setRequests] = useState<V1UserRequest[]>([]);
+  const [reading, setReading] = useState<V1ReadingProgress[]>([]);
+  const [suggestions, setSuggestions] = useState<V1SuggestionsResponse>({
+    snapshot: null,
+    lists: [],
+  });
+  const [errors, setErrors] = useState<Partial<Record<DashboardSectionKey, string>>>({});
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const data = await loadDashboardData(v1Api);
+    setRecent(data.recent);
+    setRequests(data.requests);
+    setReading(data.reading);
+    setSuggestions(data.suggestions);
+    setErrors(data.errors);
+    setLoading(false);
+  }, []);
+
+  useDependencyEffect(() => {
+    void load();
+  }, [load]);
+
+  const trending = dashboardSuggestionLists(suggestions)[0];
+  const sectionError = (key: DashboardSectionKey, fallbackKey: Parameters<typeof t>[0]) =>
+    errors[key] ? t(fallbackKey) : undefined;
+
+  return (
+    <section className="space-y-8 pt-1 pb-16 sm:space-y-10">
+      <DashboardShelf
+        id="recent-heading"
+        title={t('dashboard.recent')}
+        href="/catalog"
+        hrefLabel={t('dashboard.viewCatalog')}
+        itemCount={recent.length}
+        loading={loading}
+        error={sectionError('recent', 'dashboard.recentLoadFailed')}
+        emptyMessage={t('dashboard.recentEmpty')}
+        onRetry={() => void load()}
+      >
+        {recent.slice(0, 12).map((book) => (
+          <PosterCard
+            key={book.id}
+            to={catalogBookPath(book)}
+            title={book.title}
+            author={book.author}
+            coverUrl={book.cover_url}
+            badge={t('dashboard.newBadge')}
+            badgeTone="blue"
+          />
+        ))}
+      </DashboardShelf>
+
+      {showOptionalDashboardShelf(loading, errors.requests, requests.length) && (
+        <DashboardShelf
+          id="requests-heading"
+          title={t('dashboard.recentRequests')}
+          itemCount={requests.length}
+          loading={loading}
+          error={sectionError('requests', 'dashboard.requestsLoadFailed')}
+          emptyMessage={t('dashboard.requestsEmpty')}
+          onRetry={() => void load()}
+          skeletonVariant="wide"
+        >
+          {requests.map((request) => (
+            <RequestCard key={request.id} request={request} />
+          ))}
+        </DashboardShelf>
+      )}
+
+      {showOptionalDashboardShelf(loading, errors.reading, reading.length) && (
+        <DashboardShelf
+          id="reading-heading"
+          title={t('dashboard.continue')}
+          href="/library"
+          hrefLabel={t('dashboard.viewLibrary')}
+          itemCount={reading.length}
+          loading={loading}
+          error={sectionError('reading', 'dashboard.readingLoadFailed')}
+          emptyMessage={t('dashboard.continueEmpty')}
+          onRetry={() => void load()}
+        >
+          {reading.slice(0, 10).map((item) => (
+            <PosterCard
+              key={item.book_id}
+              to={`/library/${item.book_id}`}
+              title={item.title ?? t('dashboard.bookFallback')}
+              author={item.author}
+              coverUrl={item.cover_url}
+              badge={`${Math.round(item.progress)}%`}
+              badgeTone="green"
+              progress={item.progress}
+            />
+          ))}
+        </DashboardShelf>
+      )}
+
+      <DashboardShelf
+        id="trending-heading"
+        title={t('dashboard.trendingShelf')}
+        href="/suggestions/overall"
+        hrefLabel={t('dashboard.viewTrending')}
+        meta={
+          suggestions.snapshot ? (
+            <span className="hidden rounded-full border border-(--border-muted) bg-(--bg-soft) px-2.5 py-1 text-[11px] opacity-60 sm:inline">
+              {t('dashboard.trendingWeek', {
+                week: suggestions.snapshot.week,
+                year: suggestions.snapshot.year,
+              })}
+            </span>
+          ) : undefined
+        }
+        itemCount={trending?.items.length ?? 0}
+        loading={loading}
+        error={sectionError('suggestions', 'dashboard.trendingLoadFailed')}
+        emptyMessage={t('dashboard.trendingEmpty')}
+        onRetry={() => void load()}
+      >
+        {(trending?.items ?? []).map((book, index) => (
+          <PosterCard
+            key={book.id}
+            to={catalogBookPath(book)}
+            title={book.title}
+            author={book.author}
+            coverUrl={book.cover_url}
+            badge={`#${index + 1}`}
+          />
+        ))}
+      </DashboardShelf>
+    </section>
+  );
+};

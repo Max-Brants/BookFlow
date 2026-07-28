@@ -1,0 +1,71 @@
+version: 2
+updates:
+  # Python dependencies
+  # Dependabot supports uv version updates, but GitHub currently lists uv
+  # security updates as "Not applicable"; daily checks keep uv.lock moving
+  # while repo-level Dependabot alerts/security updates cover supported ecosystems.
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "daily"
+      time: "05:00"
+      timezone: "Europe/London"
+    cooldown:
+      default-days: 3
+    open-pull-requests-limit: 10
+    groups:
+      python-deps:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # Frontend npm dependencies
+  - package-ecosystem: "npm"
+    directory: "/src/frontend"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 3
+    open-pull-requests-limit: 10
+    groups:
+      npm-deps:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # Dockerfile base image digests. When a tag stays the same, Dependabot titles
+  # can only show digest prefixes, so keep the group name explicit.
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 3
+    open-pull-requests-limit: 5
+    groups:
+      docker-base-image-digests:
+        # Exclude python from the group on purpose. Dependabot's Docker
+        # pre-release filter is bypassed for *grouped* updates
+        # (dependabot-core#9496), so a grouped python update proposes pre-release
+        # tags like python:3.15.0b2 as if they were a normal stable minor bump.
+        # Updated individually, python is filtered correctly: alpha/beta/rc tags
+        # are skipped and only stable releases (e.g. 3.15.0 once final) are
+        # proposed. node + uv stay grouped into a single digest PR.
+        patterns: ["*"]
+        exclude-patterns: ["python"]
+    ignore:
+      # Node.js: block major-version bumps so dependabot never proposes
+      # moving from one LTS line to a non-LTS "Current" release (e.g. 24 -> 25).
+      # Node LTS is even-numbered only; major bumps should be deliberate.
+      - dependency-name: "node"
+        update-types: ["version-update:semver-major"]
+
+  # GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 3
+    open-pull-requests-limit: 5
+    groups:
+      gh-actions:
+        patterns: ["*"]
