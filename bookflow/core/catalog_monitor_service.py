@@ -550,6 +550,9 @@ class CatalogMonitorService:
         source: str,
         reset: bool = False,
         require_kobo: bool = False,
+        file_id: int | None = None,
+        locator: Any = None,
+        client_updated_at: str | None = None,
     ) -> dict[str, Any]:
         if (
             source not in {"web", "kobo"}
@@ -558,6 +561,21 @@ class CatalogMonitorService:
             or not 0 <= float(progress) <= 100
         ):
             raise CatalogMonitorError("progress must be a number from 0 to 100")
+        reader_update = file_id is not None or locator is not None or client_updated_at is not None
+        serialized_locator: str | None = None
+        normalized_reader_updated_at: str | None = None
+        if reader_update:
+            if isinstance(file_id, bool) or not isinstance(file_id, int) or file_id < 1:
+                raise CatalogMonitorError("file_id must be a positive integer")
+            if locator is None:
+                raise CatalogMonitorError("locator is required for reader progress")
+            try:
+                serialized_locator = json.dumps(locator, ensure_ascii=False, separators=(",", ":"))
+            except (TypeError, ValueError) as exc:
+                raise CatalogMonitorError("locator must be JSON serializable") from exc
+            if len(serialized_locator.encode("utf-8")) > 8192:
+                raise CatalogMonitorError("locator must be at most 8192 bytes")
+            normalized_reader_updated_at = self._normalize_reader_updated_at(client_updated_at)
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             if require_kobo:
@@ -573,21 +591,74 @@ class CatalogMonitorService:
             if not allowed:
                 conn.rollback()
                 raise PermissionError("Book is not available to this user")
+            if reader_update:
+                reader_file_allowed = conn.execute(
+                    """SELECT 1 FROM user_library ul
+                    JOIN book_files bf ON bf.book_id = ul.book_id
+                    JOIN user_file_entitlements ufe ON ufe.file_id = bf.id
+                    WHERE ul.user_id = ? AND ul.book_id = ? AND bf.id = ?
+                      AND ufe.user_id = ul.user_id AND bf.import_status = 'imported'""",
+                    (user_id, book_id, file_id),
+                ).fetchone()
+                if reader_file_allowed is None:
+                    conn.rollback()
+                    raise PermissionError("File is not available to this user")
             old = conn.execute(
-                "SELECT progress, revision FROM user_reading_progress WHERE user_id = ? AND book_id = ?",
+                """SELECT progress, revision, reader_updated_at
+                FROM user_reading_progress WHERE user_id = ? AND book_id = ?""",
                 (user_id, book_id),
             ).fetchone()
-            if old is not None and float(progress) < float(old["progress"]) and not reset:
+            if reader_update and old is not None and old["reader_updated_at"] is not None:
+                existing_reader_updated_at = self._normalize_reader_updated_at(
+                    str(old["reader_updated_at"])
+                )
+                if existing_reader_updated_at > normalized_reader_updated_at:
+                    conn.rollback()
+                    current = conn.execute(
+                        "SELECT * FROM user_reading_progress WHERE user_id = ? AND book_id = ?",
+                        (user_id, book_id),
+                    ).fetchone()
+                    return dict(current)
+            if (
+                old is not None
+                and float(progress) < float(old["progress"])
+                and not reset
+                and not reader_update
+            ):
                 conn.rollback()
                 raise CatalogMonitorError("Progress may only decrease after an explicit reset")
             revision = int(old["revision"]) + 1 if old else 1
             active = int(float(progress) < 100)
-            conn.execute(
-                """INSERT INTO user_reading_progress(user_id, book_id, progress, active, source, revision, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP) ON CONFLICT(user_id,book_id) DO UPDATE SET
-                progress=excluded.progress, active=excluded.active, source=excluded.source, revision=excluded.revision, updated_at=CURRENT_TIMESTAMP""",
-                (user_id, book_id, float(progress), active, source, revision),
-            )
+            if reader_update:
+                conn.execute(
+                    """INSERT INTO user_reading_progress(
+                        user_id, book_id, progress, active, source, revision, updated_at,
+                        file_id, locator_json, reader_updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?)
+                    ON CONFLICT(user_id,book_id) DO UPDATE SET
+                        progress=excluded.progress, active=excluded.active, source=excluded.source,
+                        revision=excluded.revision, updated_at=CURRENT_TIMESTAMP,
+                        file_id=excluded.file_id, locator_json=excluded.locator_json,
+                        reader_updated_at=excluded.reader_updated_at""",
+                    (
+                        user_id,
+                        book_id,
+                        float(progress),
+                        active,
+                        source,
+                        revision,
+                        file_id,
+                        serialized_locator,
+                        normalized_reader_updated_at,
+                    ),
+                )
+            else:
+                conn.execute(
+                    """INSERT INTO user_reading_progress(user_id, book_id, progress, active, source, revision, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP) ON CONFLICT(user_id,book_id) DO UPDATE SET
+                    progress=excluded.progress, active=excluded.active, source=excluded.source, revision=excluded.revision, updated_at=CURRENT_TIMESTAMP""",
+                    (user_id, book_id, float(progress), active, source, revision),
+                )
             self._append_kobo_progress_change(
                 conn,
                 user_id=user_id,
@@ -602,6 +673,19 @@ class CatalogMonitorService:
             ).fetchone()
             conn.commit()
         return dict(row)
+
+    @staticmethod
+    def _normalize_reader_updated_at(value: str | None) -> str:
+        """Normalize the client read timestamp used for offline last-write-wins."""
+        if not isinstance(value, str) or not value.strip():
+            raise CatalogMonitorError("client_updated_at must be an ISO-8601 timestamp")
+        try:
+            parsed = datetime.fromisoformat(value.strip())
+        except ValueError as exc:
+            raise CatalogMonitorError("client_updated_at must be an ISO-8601 timestamp") from exc
+        if parsed.tzinfo is None:
+            raise CatalogMonitorError("client_updated_at must include a timezone")
+        return parsed.astimezone(UTC).isoformat(timespec="microseconds")
 
     def clear_progress(self, *, user_id: int, book_id: int) -> bool:
         """Explicitly reset state and publish an inactive Kobo delta when paired."""

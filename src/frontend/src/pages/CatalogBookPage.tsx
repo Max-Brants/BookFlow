@@ -4,9 +4,11 @@ import { Link, useParams } from 'react-router-dom';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useDependencyEffect } from '../hooks/useMountEffect';
 import type { TranslationKey } from '../i18n/translations';
+import { downloadBookFile, fetchBookFile, shareBookFile } from '../reader/fileActions';
+import { canReadInBrowser } from '../reader/formatCapabilities';
 import { addLibraryBook, removeLibraryBook } from '../services/api';
 import { v1Api } from '../services/v1Api';
-import type { V1CatalogBookDetail, V1ReleaseProfile, V1Request } from '../types/v1';
+import type { V1BookDetail, V1CatalogBookDetail, V1ReleaseProfile, V1Request } from '../types/v1';
 import { withBasePath } from '../utils/basePath';
 import { createIdempotencyKey } from '../utils/idempotencyKey';
 import {
@@ -72,6 +74,7 @@ export const CatalogBookPage = ({ canAddToLibrary }: CatalogBookPageProps) => {
   const { language, t } = useLanguage();
   const { bookId: rawBookId, isbn: rawIsbn } = useParams();
   const [detail, setDetail] = useState<V1CatalogBookDetail | null>(null);
+  const [libraryBook, setLibraryBook] = useState<V1BookDetail | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [requesting, setRequesting] = useState(false);
   const [requestError, setRequestError] = useState<string | null>(null);
@@ -89,9 +92,11 @@ export const CatalogBookPage = ({ canAddToLibrary }: CatalogBookPageProps) => {
   const [addToKobo, setAddToKobo] = useState(false);
   const [reportField, setReportField] = useState('title');
   const [reportNote, setReportNote] = useState('');
+  const [fileAction, setFileAction] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setDetail(null);
+    setLibraryBook(null);
     setMessage(null);
     const reference = resolveCatalogBookReference(rawBookId, rawIsbn);
     if (!reference) {
@@ -99,11 +104,14 @@ export const CatalogBookPage = ({ canAddToLibrary }: CatalogBookPageProps) => {
       return;
     }
     try {
-      setDetail(
+      const nextDetail =
         reference.kind === 'isbn'
           ? await v1Api.catalogBookByIsbn(reference.value)
-          : await v1Api.catalogBook(reference.value),
-      );
+          : await v1Api.catalogBook(reference.value);
+      setDetail(nextDetail);
+      if (nextDetail.entitled) {
+        setLibraryBook(await v1Api.book(nextDetail.book.id).catch(() => null));
+      }
     } catch (caught) {
       setMessage(caught instanceof Error ? caught.message : t('common.loadFailed'));
     }
@@ -175,15 +183,39 @@ export const CatalogBookPage = ({ canAddToLibrary }: CatalogBookPageProps) => {
   if (personal.kobo_state === 'deleted') koboLabel = t('catalogDetail.koboDeleted');
 
   const primaryAction = catalogPrimaryAction(detail, canAddToLibrary);
+  const readableFile = libraryBook?.files.find((file) => canReadInBrowser(file.file_format));
+  const readerPath = readableFile ? `/library/${book.id}/read/${readableFile.id}` : '/library';
+  let openLabel = t('catalogDetail.openPersonal');
+  if (readableFile) openLabel = t('catalogDetail.readNow');
+  if (progress !== null) openLabel = t('catalogDetail.continueReading');
+  const runFileAction = (
+    action: 'download' | 'share',
+    file: NonNullable<typeof libraryBook>['files'][number],
+  ) => {
+    const actionKey = `${action}-${file.id}`;
+    setFileAction(actionKey);
+    setMessage(null);
+    void fetchBookFile(v1Api.libraryFileDownloadUrl(book.id, file.id), book.title, file.file_format)
+      .then((bookFile) =>
+        action === 'share'
+          ? shareBookFile(bookFile, book.title)
+          : Promise.resolve(downloadBookFile(bookFile)),
+      )
+      .catch((caught: unknown) => {
+        if (caught instanceof DOMException && caught.name === 'AbortError') return;
+        setMessage(caught instanceof Error ? caught.message : t('common.loadFailed'));
+      })
+      .finally(() => setFileAction(null));
+  };
   let action: ReactNode;
   if (primaryAction === 'open-library') {
     action = (
       <>
         <Link
-          to={`/library/${book.id}`}
+          to={readerPath}
           className="rounded-lg bg-violet-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-violet-950/30 transition hover:bg-violet-500"
         >
-          {progress !== null ? t('catalogDetail.continueReading') : t('catalogDetail.openPersonal')}
+          {openLabel}
         </Link>
         {detail.in_library &&
           (confirmRemoval ? (
@@ -581,6 +613,57 @@ export const CatalogBookPage = ({ canAddToLibrary }: CatalogBookPageProps) => {
           </h2>
           <p className="mt-1 text-sm opacity-60">{t('catalogDetail.personalHelp')}</p>
 
+          {libraryBook && libraryBook.files.length > 0 && (
+            <div className="mt-5 space-y-2" aria-label={t('catalogDetail.availableFiles')}>
+              {libraryBook.files.map((file) => {
+                const readable = canReadInBrowser(file.file_format);
+                return (
+                  <div
+                    key={file.id}
+                    className="rounded-xl border border-(--border-muted) bg-(--bg) p-3"
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="font-semibold">{file.file_format.toUpperCase()}</span>
+                      <span className="text-xs opacity-60">
+                        {(file.size_bytes / 1024 / 1024).toFixed(1)} MB
+                      </span>
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {readable && (
+                        <Link
+                          to={`/library/${book.id}/read/${file.id}`}
+                          className="rounded-md bg-violet-600 px-2.5 py-1.5 text-xs font-semibold text-white"
+                        >
+                          {t('catalogDetail.readNow')}
+                        </Link>
+                      )}
+                      <button
+                        type="button"
+                        disabled={fileAction !== null}
+                        className="rounded-md border border-(--border-muted) px-2.5 py-1.5 text-xs font-semibold disabled:opacity-50"
+                        onClick={() => runFileAction('download', file)}
+                      >
+                        {fileAction === `download-${file.id}`
+                          ? t('catalogDetail.downloading')
+                          : t('bookDetail.download')}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={fileAction !== null}
+                        className="rounded-md border border-(--border-muted) px-2.5 py-1.5 text-xs font-semibold disabled:opacity-50"
+                        onClick={() => runFileAction('share', file)}
+                      >
+                        {fileAction === `share-${file.id}`
+                          ? t('catalogDetail.openingOtherApp')
+                          : t('catalogDetail.openOtherApp')}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
           {progress !== null && (
             <div className="mt-5 rounded-xl border border-(--border-muted) bg-(--bg) p-4">
               <div className="flex items-center justify-between gap-3 text-sm">
@@ -593,12 +676,12 @@ export const CatalogBookPage = ({ canAddToLibrary }: CatalogBookPageProps) => {
                   style={{ width: `${progress}%` }}
                 />
               </div>
-              <a
-                href="#personal-book-heading"
+              <Link
+                to={readerPath}
                 className="mt-4 inline-flex text-sm font-semibold text-violet-600 hover:text-violet-500 dark:text-violet-300"
               >
                 {t('catalogDetail.continueReading')} →
-              </a>
+              </Link>
             </div>
           )}
 

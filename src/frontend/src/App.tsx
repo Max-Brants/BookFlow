@@ -19,6 +19,8 @@ import { useToast } from './hooks/useToast';
 import { primeUsersCache } from './hooks/useUsersFetch';
 import { LibraryNavigation } from './library/LibraryNavigation';
 import { LibraryPage } from './library/LibraryPage';
+import { readOfflinePwaBootstrap, saveOfflinePwaBootstrap } from './library/offline';
+import { OfflineReadingCoordinator } from './library/offline/OfflineReadingCoordinator';
 import { AdminDownloadsPage } from './pages/AdminDownloadsPage';
 import { AdminSettingsPage } from './pages/AdminSettingsPage';
 import { AdminUserDetailPage } from './pages/AdminUserDetailPage';
@@ -33,6 +35,7 @@ import { ReleaseProfilesPage } from './pages/ReleaseProfilesPage';
 import { RequestsPage } from './pages/RequestsPage';
 import { SelfSettingsPage } from './pages/SelfSettingsPage';
 import { SuggestionsPage } from './pages/SuggestionsPage';
+import { ReaderPage } from './reader/ReaderPage';
 import { cancelDownload, getConfig, getSelfSettings, retryDownload } from './services/api';
 import { v1Api } from './services/v1Api';
 import type { AppConfig } from './types';
@@ -116,10 +119,25 @@ function App() {
       if (nextConfig.settings_enabled && !nextConfig.onboarding_complete) {
         setOnboardingOpen(true);
       }
+      const accountId = username ?? (authRequired ? null : 'local');
+      if (accountId) {
+        await saveOfflinePwaBootstrap({
+          profile: {
+            accountId,
+            username,
+            displayName,
+            isAdmin,
+            libraryCapability,
+          },
+          config: nextConfig,
+        });
+      }
     } catch (error) {
       console.error('Failed to load config:', error);
+      const cached = await readOfflinePwaBootstrap().catch(() => null);
+      if (cached) setConfig(cached.config);
     }
-  }, [setLanguage]);
+  }, [authRequired, displayName, isAdmin, libraryCapability, setLanguage, username]);
 
   useDependencyEffect(() => {
     if (!isAuthenticated) return;
@@ -167,6 +185,7 @@ function App() {
 
   const app = (
     <>
+      <OfflineReadingCoordinator accountId={username ?? 'local'} />
       <div className="fixed top-0 right-0 left-0 z-40">
         <Header
           debug={config?.debug}
@@ -215,6 +234,10 @@ function App() {
           <Routes>
             <Route path="/" element={<DashboardPage />} />
             <Route path="/library" element={<LibraryPage koboEnabled={koboEnabled} />} />
+            <Route
+              path="/library/:bookId/read/:fileId"
+              element={<ReaderPage accountId={username ?? 'local'} />}
+            />
             <Route path="/kobo" element={<LibraryPage koboEnabled={koboEnabled} koboOnly />} />
             <Route path="/catalog" element={<CatalogPage />} />
             <Route path="/catalog/authors" element={<CatalogEntitiesPage kind="authors" />} />

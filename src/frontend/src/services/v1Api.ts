@@ -200,17 +200,36 @@ export const v1Api = {
   },
   readingProgress: (): Promise<V1Page<V1ReadingProgress>> =>
     requestV1('/users/me/reading-progress?active=true'),
+  libraryFileDownloadUrl: (bookId: number, fileId: number): string =>
+    `${V1_BASE}/library/books/${bookId}/files/${fileId}/download`,
   readingProgressForBook: (bookId: number): Promise<{ progress: V1ReadingProgress }> =>
     requestV1(`/users/me/reading-progress/${bookId}`),
   setReadingProgress: (
     bookId: number,
     progress: number,
     reset = false,
+    reader?: {
+      fileId: number;
+      locator: unknown;
+      clientUpdatedAt: string;
+      completed: boolean;
+    },
   ): Promise<{ progress: V1ReadingProgress }> =>
     requestV1(`/users/me/reading-progress/${bookId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ progress, reset }),
+      body: JSON.stringify({
+        ...(reader
+          ? {
+              progression: progress,
+              file_id: reader.fileId,
+              locator: reader.locator,
+              client_updated_at: reader.clientUpdatedAt,
+              completed: reader.completed,
+            }
+          : { progress }),
+        reset,
+      }),
     }),
   clearReadingProgress: (bookId: number): Promise<{ book_id: number; reset: true }> =>
     requestV1(`/users/me/reading-progress/${bookId}`, { method: 'DELETE' }),

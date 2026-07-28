@@ -8,13 +8,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import mimetypes
 import sqlite3
 import uuid
 from dataclasses import dataclass
 from functools import wraps
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from flask import Blueprint, Flask, Response, g, jsonify, request
+from flask import Blueprint, Flask, Response, g, jsonify, request, send_file
 
 from bookflow.core.bestseller_service import BestsellerSuggestionService
 from bookflow.core.book_groups import canonical_book_id, equivalent_book_ids
@@ -22,6 +24,7 @@ from bookflow.core.book_matcher import normalize_isbn
 from bookflow.core.catalog_monitor_service import CatalogMonitorError, CatalogMonitorService
 from bookflow.core.durable_jobs import DurableJobService
 from bookflow.core.library_service import LibraryService
+from bookflow.core.path_security import PathSecurityError
 from bookflow.core.release_candidates import ReleaseCandidate, evaluate_candidate
 from bookflow.core.release_profile_service import (
     ReleaseProfileError,
@@ -55,6 +58,7 @@ def register_v1_api(
     database_path: str | Path,
     resolve_actor: Callable[[], V1Actor | None],
     default_profile: Callable[[], dict[str, Any]] | None = None,
+    resolve_file_path: Callable[[str], Path] | None = None,
 ) -> None:
     """Register the standalone ``/api/v1`` Blueprint on an application.
 
@@ -109,6 +113,50 @@ def register_v1_api(
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
         return conn
+
+    def reader_content_type(file_format: object, declared_mime_type: object) -> str:
+        """Return a safe inline MIME type for the reader's supported assets."""
+        normalized_format = str(file_format or "").strip().casefold().lstrip(".")
+        known = {
+            "epub": "application/epub+zip",
+            "kepub": "application/epub+zip",
+            "kepub.epub": "application/epub+zip",
+            "pdf": "application/pdf",
+            "cbz": "application/vnd.comicbook+zip",
+            "fb2": "application/x-fictionbook+xml",
+            "mobi": "application/x-mobipocket-ebook",
+            "azw3": "application/vnd.amazon.ebook",
+        }
+        if normalized_format in known:
+            return known[normalized_format]
+        if isinstance(declared_mime_type, str) and declared_mime_type.strip():
+            return declared_mime_type.strip()
+        guessed, _encoding = mimetypes.guess_type(f"book.{normalized_format}")
+        return guessed or "application/octet-stream"
+
+    def reader_mode(file_format: object) -> str | None:
+        normalized_format = str(file_format or "").strip().casefold().lstrip(".")
+        if normalized_format in {"epub", "kepub", "kepub.epub", "mobi", "azw3", "fb2"}:
+            return "reflowable"
+        if normalized_format in {"pdf", "cbz"}:
+            return "fixed"
+        return None
+
+    def serialize_reader_progress(progress: dict[str, Any]) -> dict[str, Any]:
+        """Expose the stored locator as JSON rather than a database encoding."""
+        serialized = dict(progress)
+        raw_locator = serialized.pop("locator_json", None)
+        if raw_locator is not None:
+            try:
+                serialized["locator"] = json.loads(str(raw_locator))
+            except json.JSONDecodeError:
+                serialized["locator"] = None
+        raw_progress = serialized.get("progress")
+        if isinstance(raw_progress, (int, float)) and not isinstance(raw_progress, bool):
+            serialized["progression"] = float(raw_progress) / 100
+        if "active" in serialized:
+            serialized["completed"] = not bool(serialized["active"])
+        return serialized
 
     def enqueue_request_status(request_row: dict[str, Any]) -> None:
         """Queue personal request status after its durable DB transition."""
@@ -1112,11 +1160,11 @@ def register_v1_api(
         actor: V1Actor = g.v1_actor
         try:
             offset, limit = page()
-            return jsonify(
-                catalog_service.list_active_progress(
-                    user_id=actor.user_id, offset=offset, limit=limit
-                )
+            result = catalog_service.list_active_progress(
+                user_id=actor.user_id, offset=offset, limit=limit
             )
+            result["items"] = [serialize_reader_progress(item) for item in result["items"]]
+            return jsonify(result)
         except ValueError as exc:
             return error("invalid_pagination", str(exc), 400)
 
@@ -1127,35 +1175,61 @@ def register_v1_api(
         progress = catalog_service.get_progress(user_id=actor.user_id, book_id=book_id)
         if progress is None:
             return error("progress_not_found", "Reading progress not found", 404)
-        return jsonify({"progress": progress})
+        return jsonify({"progress": serialize_reader_progress(progress)})
 
-    @blueprint.patch("/users/me/reading-progress/<int:book_id>")
+    @blueprint.route("/users/me/reading-progress/<int:book_id>", methods=["PATCH", "PUT"])
     @require_actor()
     def patch_reading_progress(book_id: int) -> Response | tuple[Response, int]:
         actor: V1Actor = g.v1_actor
         payload = request.get_json(silent=True)
-        if (
-            not isinstance(payload, dict)
-            or isinstance(payload.get("progress"), bool)
-            or not isinstance(payload.get("progress"), (int, float))
-        ):
-            return error("invalid_progress", "progress must be a number", 400)
+        if not isinstance(payload, dict):
+            return error("invalid_progress", "Request body must be an object", 400)
+        raw_progress = payload.get("progress")
+        raw_progression = payload.get("progression")
+        if raw_progression is not None:
+            if isinstance(raw_progression, bool) or not isinstance(raw_progression, (int, float)):
+                return error("invalid_progress", "progression must be a number", 400)
+            if not 0 <= float(raw_progression) <= 1:
+                return error("invalid_progress", "progression must be from 0 to 1", 400)
+            progress = float(raw_progression) * 100
+        elif not isinstance(raw_progress, bool) and isinstance(raw_progress, (int, float)):
+            progress = float(raw_progress)
+        else:
+            return error("invalid_progress", "progress or progression must be a number", 400)
         reset = payload.get("reset", False)
         if not isinstance(reset, bool):
             return error("invalid_progress", "reset must be a boolean", 400)
+        completed = payload.get("completed")
+        if completed is not None:
+            if not isinstance(completed, bool):
+                return error("invalid_progress", "completed must be a boolean", 400)
+            if completed and progress != 100:
+                return error("invalid_progress", "completed progress must be 1", 400)
+
+        reader_keys = {"file_id", "locator", "client_updated_at"}
+        reader_update = any(key in payload for key in reader_keys)
+        if reader_update and not reader_keys.issubset(payload):
+            return error(
+                "invalid_progress",
+                "file_id, locator and client_updated_at are required for reader progress",
+                400,
+            )
         try:
             updated = catalog_service.set_progress(
                 user_id=actor.user_id,
                 book_id=book_id,
-                progress=float(payload["progress"]),
+                progress=progress,
                 source="web",
                 reset=reset,
+                file_id=payload.get("file_id") if reader_update else None,
+                locator=payload.get("locator") if reader_update else None,
+                client_updated_at=payload.get("client_updated_at") if reader_update else None,
             )
         except PermissionError as exc:
             return error("book_not_found", str(exc), 404)
         except CatalogMonitorError as exc:
             return error("invalid_progress", str(exc), 409)
-        return jsonify({"progress": updated})
+        return jsonify({"progress": serialize_reader_progress(updated)})
 
     @blueprint.delete("/users/me/reading-progress/<int:book_id>")
     @require_actor()
@@ -1395,10 +1469,24 @@ def register_v1_api(
                 "SELECT * FROM user_kobo_books WHERE user_id = ? AND book_id = ?",
                 (actor.user_id, book_id),
             ).fetchone()
+        serialized_files = []
+        for file in files:
+            serialized_file = dict(file)
+            mode = reader_mode(serialized_file.get("file_format"))
+            serialized_file["browser_reader"] = mode
+            serialized_file["content_url"] = (
+                f"/api/v1/library/books/{book_id}/files/{serialized_file['id']}/content"
+                if mode is not None
+                else None
+            )
+            serialized_file["download_url"] = (
+                f"/api/v1/library/books/{book_id}/files/{serialized_file['id']}/download"
+            )
+            serialized_files.append(serialized_file)
         return jsonify(
             {
                 "book": dict(book),
-                "files": [dict(file) for file in files],
+                "files": serialized_files,
                 "entitled": bool(files),
                 "request": dict(request_row) if request_row else None,
                 "kobo": dict(kobo_row) if kobo_row else None,
@@ -1409,6 +1497,86 @@ def register_v1_api(
     @require_actor()
     def library_files(book_id: int) -> Response | tuple[Response, int]:
         return library_book_detail(book_id)
+
+    @blueprint.route(
+        "/library/books/<int:book_id>/files/<int:file_id>/content", methods=["GET", "HEAD"]
+    )
+    @require_actor()
+    def library_reader_content(book_id: int, file_id: int) -> Response | tuple[Response, int]:
+        """Stream one entitled imported file for the browser reader.
+
+        The query deliberately requires both Book-level library membership and
+        this exact file's entitlement.  A file id from another Book, another
+        user, or a removed library entry is indistinguishable from a missing
+        resource to avoid leaking the shared storage catalog.
+        """
+        actor: V1Actor = g.v1_actor
+        with connect() as conn:
+            file_row = conn.execute(
+                """SELECT bf.storage_path, bf.file_format, bf.mime_type
+                FROM user_library ul
+                JOIN book_files bf ON bf.book_id = ul.book_id
+                JOIN user_file_entitlements ufe ON ufe.file_id = bf.id
+                WHERE ul.user_id = ? AND ul.book_id = ? AND bf.id = ?
+                  AND ufe.user_id = ul.user_id AND bf.import_status = 'imported'""",
+                (actor.user_id, book_id, file_id),
+            ).fetchone()
+        if file_row is None:
+            return error("file_not_found", "File not found", 404)
+        if reader_mode(file_row["file_format"]) is None:
+            return error("file_not_found", "File not found", 404)
+        if resolve_file_path is None:
+            return error("file_unavailable", "Reader file service is unavailable", 503)
+        try:
+            path = resolve_file_path(str(file_row["storage_path"]))
+        except (OSError, ValueError, PathSecurityError):
+            return error("file_unavailable", "File is unavailable", 404)
+        if not path.is_file():
+            return error("file_unavailable", "File is unavailable", 404)
+        return send_file(
+            path,
+            mimetype=reader_content_type(file_row["file_format"], file_row["mime_type"]),
+            as_attachment=False,
+            download_name=path.name,
+            conditional=True,
+            etag=True,
+        )
+
+    @blueprint.route(
+        "/library/books/<int:book_id>/files/<int:file_id>/download", methods=["GET", "HEAD"]
+    )
+    @require_actor()
+    def library_file_download(book_id: int, file_id: int) -> Response | tuple[Response, int]:
+        """Download one entitled imported file, including non-reader formats."""
+        actor: V1Actor = g.v1_actor
+        with connect() as conn:
+            file_row = conn.execute(
+                """SELECT bf.storage_path, bf.file_format, bf.mime_type
+                FROM user_library ul
+                JOIN book_files bf ON bf.book_id = ul.book_id
+                JOIN user_file_entitlements ufe ON ufe.file_id = bf.id
+                WHERE ul.user_id = ? AND ul.book_id = ? AND bf.id = ?
+                  AND ufe.user_id = ul.user_id AND bf.import_status = 'imported'""",
+                (actor.user_id, book_id, file_id),
+            ).fetchone()
+        if file_row is None:
+            return error("file_not_found", "File not found", 404)
+        if resolve_file_path is None:
+            return error("file_unavailable", "File service is unavailable", 503)
+        try:
+            path = resolve_file_path(str(file_row["storage_path"]))
+        except (OSError, ValueError, PathSecurityError):
+            return error("file_unavailable", "File is unavailable", 404)
+        if not path.is_file():
+            return error("file_unavailable", "File is unavailable", 404)
+        return send_file(
+            path,
+            mimetype=reader_content_type(file_row["file_format"], file_row["mime_type"]),
+            as_attachment=True,
+            download_name=path.name,
+            conditional=True,
+            etag=True,
+        )
 
     @blueprint.post("/requests")
     @require_actor()

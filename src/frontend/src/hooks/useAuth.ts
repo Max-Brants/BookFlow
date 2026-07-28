@@ -2,6 +2,11 @@ import { useState, useCallback } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 
 import { useSocket } from '../contexts/SocketContext';
+import {
+  clearOfflinePwaBootstrap,
+  offlineReadingLibrary,
+  readOfflinePwaBootstrap,
+} from '../library/offline';
 import { login, logout, checkAuth } from '../services/api';
 import type { LibraryCapability, LoginCredentials } from '../types';
 import { shouldEnableAuthenticatedServices } from '../utils/authenticatedServices';
@@ -95,10 +100,25 @@ export function useAuth(options: UseAuthOptions = {}): UseAuthReturn {
         applyAuthResponse(await checkAuth());
       } catch (error) {
         console.error('Auth check failed:', error);
-        setAuthRequired(true);
-        setIsAuthenticated(false);
-        setIsAdmin(false);
-        setLibraryCapability(null);
+        const cached = await readOfflinePwaBootstrap().catch(() => null);
+        if (cached) {
+          const capability =
+            cached.profile.libraryCapability === 'download-capable' ||
+            cached.profile.libraryCapability === 'request-only'
+              ? cached.profile.libraryCapability
+              : null;
+          setAuthRequired(true);
+          setIsAuthenticated(true);
+          setIsAdmin(cached.profile.isAdmin);
+          setLibraryCapability(capability);
+          setUsername(cached.profile.username);
+          setDisplayName(cached.profile.displayName);
+        } else {
+          setAuthRequired(true);
+          setIsAuthenticated(false);
+          setIsAdmin(false);
+          setLibraryCapability(null);
+        }
       } finally {
         setAuthChecked(true);
       }
@@ -172,7 +192,12 @@ export function useAuth(options: UseAuthOptions = {}): UseAuthReturn {
 
   const handleLogout = useCallback(async () => {
     try {
+      const accountId = username ?? 'local';
       const { logout_url } = await logout();
+      await Promise.all([
+        offlineReadingLibrary.clearAccount(accountId),
+        clearOfflinePwaBootstrap(accountId),
+      ]);
       if (logout_url?.startsWith('https://') || logout_url?.startsWith('http://')) {
         window.location.href = logout_url;
         return;
@@ -194,7 +219,7 @@ export function useAuth(options: UseAuthOptions = {}): UseAuthReturn {
       console.error('Logout failed:', error);
       showToast?.('Logout failed', 'error');
     }
-  }, [navigate, onLogoutSuccess, showToast, applyAuthResponse]);
+  }, [navigate, onLogoutSuccess, showToast, applyAuthResponse, username]);
 
   return {
     isAuthenticated,

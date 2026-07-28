@@ -1010,6 +1010,22 @@ CREATE UNIQUE INDEX idx_blocked_releases_active ON blocked_releases(fingerprint,
 """
 _MIGRATION_025_CHECKSUM = hashlib.sha256(_MIGRATION_025_DEFINITION.encode()).hexdigest()
 
+# Reader locations are tied to the imported file that rendered them.  The
+# existing ``user_reading_progress`` row remains book-scoped for Kobo sync and
+# the Continue Reading shelf; these additive fields let the web reader restore
+# an EPUB CFI or fixed-layout page without inventing a second progress model.
+_MIGRATION_026_DEFINITION = """
+ALTER TABLE user_reading_progress ADD COLUMN file_id
+    INTEGER REFERENCES book_files(id) ON DELETE SET NULL;
+ALTER TABLE user_reading_progress ADD COLUMN locator_json TEXT
+    CHECK(locator_json IS NULL OR json_valid(locator_json));
+ALTER TABLE user_reading_progress ADD COLUMN reader_updated_at TEXT;
+CREATE INDEX idx_user_reading_progress_file
+ON user_reading_progress(user_id, file_id)
+WHERE file_id IS NOT NULL;
+"""
+_MIGRATION_026_CHECKSUM = hashlib.sha256(_MIGRATION_026_DEFINITION.encode()).hexdigest()
+
 
 def _require_loaded_user(user: dict[str, Any] | None) -> dict[str, Any]:
     """Return a loaded user row or raise when the DB insert result is inconsistent."""
@@ -1284,6 +1300,12 @@ class UserDB:
                             checksum=_MIGRATION_025_CHECKSUM,
                             apply=self._apply_migration_025,
                         ),
+                        Migration(
+                            version=26,
+                            name="reader-file-locators",
+                            checksum=_MIGRATION_026_CHECKSUM,
+                            apply=self._apply_migration_026,
+                        ),
                     ),
                 )
                 migrator.migrate()
@@ -1535,6 +1557,11 @@ class UserDB:
     def _apply_migration_025(conn: sqlite3.Connection) -> None:
         """Apply the one-way v24 terminology upgrade."""
         _execute_sql_script(conn, _MIGRATION_025_DEFINITION)
+
+    @staticmethod
+    def _apply_migration_026(conn: sqlite3.Connection) -> None:
+        """Attach web-reader locations to the existing book progress rows."""
+        _execute_sql_script(conn, _MIGRATION_026_DEFINITION)
 
     @staticmethod
     def _backfill_catalog_phase_one(conn: sqlite3.Connection) -> None:
