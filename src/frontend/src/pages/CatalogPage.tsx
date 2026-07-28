@@ -1,8 +1,11 @@
 import { useCallback, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 
+import { BookSelectionControl } from '../components/BookSelectionControl';
+import { BulkLibraryActionBar } from '../components/BulkLibraryActionBar';
 import { DiscoverNavigation } from '../components/DiscoverNavigation';
 import { useLanguage } from '../contexts/LanguageContext';
+import { useBulkLibrarySelection } from '../hooks/useBulkLibrarySelection';
 import { useDependencyEffect } from '../hooks/useMountEffect';
 import { resolveCatalogBook, searchMetadata } from '../services/api';
 import { v1Api } from '../services/v1Api';
@@ -45,6 +48,7 @@ export const CatalogPage = () => {
   const seriesId = params.get('series_id') ?? '';
   const pageSize = 30;
   const offset = Math.max(0, Number(params.get('offset') ?? '0') || 0);
+  const bulk = useBulkLibrarySelection(JSON.stringify({ q, format, sort, authorId, seriesId }));
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -130,6 +134,17 @@ export const CatalogPage = () => {
         <p className="mt-2 text-sm opacity-65">{t('catalog.subtitle')}</p>
       </div>
       <DiscoverNavigation />
+      <div className="mb-4 flex justify-end">
+        <button
+          type="button"
+          onClick={() => bulk.setActive(!bulk.active)}
+          className={`rounded-md border px-3 py-2 text-sm font-medium ${
+            bulk.active ? 'border-violet-500 bg-violet-600 text-white' : 'border-(--border-muted)'
+          }`}
+        >
+          {bulk.active ? t('bulkLibrary.cancelSelection') : t('bulkLibrary.select')}
+        </button>
+      </div>
       <form
         className="bookflow-panel mb-6 grid gap-3 rounded-2xl p-3 sm:grid-cols-[1fr_auto_auto_auto]"
         onSubmit={(event) => {
@@ -213,8 +228,15 @@ export const CatalogPage = () => {
             }
           >
             {books.map((book) => (
-              <article key={book.id} className={view === 'grid' ? 'min-w-0' : 'flex gap-4 p-4'}>
-                <Link to={catalogBookPath(book)} className={view === 'grid' ? 'block' : 'contents'}>
+              <article
+                key={book.id}
+                className={`relative ${view === 'grid' ? 'min-w-0' : 'flex gap-4 p-4'}`}
+              >
+                <Link
+                  to={catalogBookPath(book)}
+                  tabIndex={bulk.active ? -1 : undefined}
+                  className={view === 'grid' ? 'block' : 'contents'}
+                >
                   <div className={view === 'grid' ? '' : 'w-16 shrink-0'}>
                     <Cover book={book} alt={t('common.coverOf', { title: book.title })} />
                   </div>
@@ -233,6 +255,13 @@ export const CatalogPage = () => {
                     )}
                   </div>
                 </Link>
+                <BookSelectionControl
+                  active={bulk.active}
+                  inLibrary={Boolean(book.in_library)}
+                  selected={bulk.selected.has(book.id)}
+                  title={book.title}
+                  onToggle={() => bulk.toggle(book.id)}
+                />
               </article>
             ))}
           </div>
@@ -312,6 +341,26 @@ export const CatalogPage = () => {
           )}
         </section>
       )}
+      <BulkLibraryActionBar
+        visible={bulk.active}
+        selectedCount={bulk.selected.size}
+        busy={bulk.busy}
+        limitReached={bulk.limitReached}
+        response={bulk.response}
+        error={bulk.error}
+        onSelectPage={() => bulk.selectPage(books)}
+        onClear={bulk.clear}
+        onCancel={() => bulk.setActive(false)}
+        onSubmit={() =>
+          void bulk.submit((successfulIds) => {
+            setBooks((current) =>
+              current.map((book) =>
+                successfulIds.has(book.id) ? { ...book, in_library: true } : book,
+              ),
+            );
+          })
+        }
+      />
     </section>
   );
 };

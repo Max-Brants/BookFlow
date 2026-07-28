@@ -5,6 +5,7 @@ import type {
   V1Attempt,
   V1Book,
   V1BookDetail,
+  V1BulkLibraryResponse,
   V1Backup,
   V1BestsellerAdminStatus,
   V1CatalogBook,
@@ -172,6 +173,12 @@ export const v1Api = {
     requestV1(`/catalog/books/${bookId}`),
   catalogBookByIsbn: (isbn: string): Promise<V1CatalogBookDetail> =>
     requestV1(`/catalog/books/isbn/${encodeURIComponent(isbn)}`),
+  bulkAddLibraryBooks: (bookIds: number[]): Promise<V1BulkLibraryResponse> =>
+    requestV1('/library/books/bulk', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ book_ids: bookIds }),
+    }),
   catalogPresence: (
     candidates: Array<{ provider?: string; provider_book_id?: string; isbn?: string }>,
   ): Promise<{ present: number[] }> =>
