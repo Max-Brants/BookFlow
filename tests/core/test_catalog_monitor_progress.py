@@ -317,8 +317,12 @@ def test_reader_content_and_file_locator_progress_are_entitlement_scoped(tmp_pat
     reader_path = tmp_path / "reader.epub"
     reader_path.write_bytes(b"0123456789")
     with sqlite3.connect(path) as conn:
-        file_id = int(conn.execute("SELECT id FROM book_files WHERE book_id = ?", (book_id,)).fetchone()[0])
-        other_user_id = int(conn.execute("SELECT id FROM users WHERE username = 'other'").fetchone()[0])
+        file_id = int(
+            conn.execute("SELECT id FROM book_files WHERE book_id = ?", (book_id,)).fetchone()[0]
+        )
+        other_user_id = int(
+            conn.execute("SELECT id FROM users WHERE username = 'other'").fetchone()[0]
+        )
 
     app = Flask(__name__)
     app.config["TESTING"] = True
@@ -419,9 +423,7 @@ def test_reader_content_and_file_locator_progress_are_entitlement_scoped(tmp_pat
         resolve_actor=lambda: V1Actor(other_user_id),
         resolve_file_path=Path,
     )
-    denied = other_app.test_client().get(
-        f"/api/v1/library/books/{book_id}/files/{file_id}/content"
-    )
+    denied = other_app.test_client().get(f"/api/v1/library/books/{book_id}/files/{file_id}/content")
     assert denied.status_code == 404
 
 

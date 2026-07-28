@@ -1529,7 +1529,7 @@ def register_v1_api(
             return error("file_unavailable", "Reader file service is unavailable", 503)
         try:
             path = resolve_file_path(str(file_row["storage_path"]))
-        except (OSError, ValueError, PathSecurityError):
+        except OSError, ValueError, PathSecurityError:
             return error("file_unavailable", "File is unavailable", 404)
         if not path.is_file():
             return error("file_unavailable", "File is unavailable", 404)
@@ -1565,7 +1565,7 @@ def register_v1_api(
             return error("file_unavailable", "File service is unavailable", 503)
         try:
             path = resolve_file_path(str(file_row["storage_path"]))
-        except (OSError, ValueError, PathSecurityError):
+        except OSError, ValueError, PathSecurityError:
             return error("file_unavailable", "File is unavailable", 404)
         if not path.is_file():
             return error("file_unavailable", "File is unavailable", 404)
