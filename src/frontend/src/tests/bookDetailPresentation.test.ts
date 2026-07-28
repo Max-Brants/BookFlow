@@ -52,6 +52,16 @@ describe('presentBookDetail', () => {
       ).isbn,
     ).toBe('1526622424');
   });
+
+  it('normalizes provider HTML in descriptions', () => {
+    expect(
+      presentBookDetail(
+        detailBook({
+          description: 'Gort &amp; vrienden</br><em>In Frankrijk</em>',
+        }),
+      ).description,
+    ).toBe('Gort & vrienden\nIn Frankrijk');
+  });
 });
 
 describe('requestStatusKind', () => {
