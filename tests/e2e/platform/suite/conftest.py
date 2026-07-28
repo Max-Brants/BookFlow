@@ -7,6 +7,7 @@ invariants and therefore run across the whole configuration matrix.
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import time
@@ -55,8 +56,13 @@ class PlatformClient:
     def _ensure_catalog_book(self, query: str) -> int:
         """Seed canonical metadata for a black-box release-search scenario."""
         seed_script = """
+import json
 import os
 import sqlite3
+from pathlib import Path
+
+from flask import Flask
+from flask.sessions import SecureCookieSessionInterface
 
 query = os.environ["E2E_BOOK_QUERY"]
 provider_book_id = f"platform:{query.casefold()}"
@@ -82,7 +88,13 @@ with sqlite3.connect("/config/users.db", timeout=10) as connection:
     ).fetchone()
 if row is None:
     raise RuntimeError(f"Could not seed E2E catalog book for {query!r}")
-print(row[0])
+
+app = Flask("bookflow-e2e-session")
+app.secret_key = Path("/config/.flask_secret").read_bytes()
+serializer = SecureCookieSessionInterface().get_signing_serializer(app)
+if serializer is None:
+    raise RuntimeError("Could not create E2E session serializer")
+print(json.dumps({"book_id": row[0], "session": serializer.dumps({"is_admin": True})}))
 """
         result = subprocess.run(
             [
@@ -104,7 +116,9 @@ print(row[0])
             raise RuntimeError(
                 f"Could not seed E2E catalog book for {query!r}: {result.stderr.strip()}"
             )
-        return int(result.stdout.strip())
+        seeded = json.loads(result.stdout)
+        self.session.cookies.set("bookflow_session", str(seeded["session"]))
+        return int(seeded["book_id"])
 
     def search_releases(
         self,
