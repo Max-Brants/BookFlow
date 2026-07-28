@@ -309,6 +309,7 @@ try:
         app,
         database_path=_user_db_path,
         resolve_actor=resolve_v1_actor,
+        resolve_file_path=_resolve_library_file_for_serving,
     )
     github_issue_token = os.environ.get("GITHUB_ISSUE_TOKEN", "").strip()
     github_issue_repository = os.environ.get(
@@ -1407,7 +1408,9 @@ def set_security_headers(response: Response) -> Response:
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault(
         "Content-Security-Policy",
-        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' ws: wss:",
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data: blob:; connect-src 'self' ws: wss:; "
+        "worker-src 'self' blob:; frame-src 'self' blob:; object-src 'none'",
     )
     response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
     response.headers.setdefault("Cross-Origin-Embedder-Policy", "credentialless")

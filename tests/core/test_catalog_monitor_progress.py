@@ -312,6 +312,121 @@ def test_v1_progress_is_user_scoped(tmp_path: Path) -> None:
     assert recent.json["total"] == 1
 
 
+def test_reader_content_and_file_locator_progress_are_entitlement_scoped(tmp_path: Path) -> None:
+    path, user_id, book_id = _database(tmp_path)
+    reader_path = tmp_path / "reader.epub"
+    reader_path.write_bytes(b"0123456789")
+    with sqlite3.connect(path) as conn:
+        file_id = int(
+            conn.execute("SELECT id FROM book_files WHERE book_id = ?", (book_id,)).fetchone()[0]
+        )
+        other_user_id = int(
+            conn.execute("SELECT id FROM users WHERE username = 'other'").fetchone()[0]
+        )
+
+    app = Flask(__name__)
+    app.config["TESTING"] = True
+    register_v1_api(
+        app,
+        database_path=path,
+        resolve_actor=lambda: V1Actor(user_id),
+        resolve_file_path=Path,
+    )
+    client = app.test_client()
+
+    detail = client.get(f"/api/v1/library/books/{book_id}")
+    assert detail.status_code == 200
+    assert detail.json["files"] == [
+        {
+            "id": file_id,
+            "file_format": "epub",
+            "size_bytes": 1,
+            "mime_type": None,
+            "imported_at": detail.json["files"][0]["imported_at"],
+            "granted_at": detail.json["files"][0]["granted_at"],
+            "browser_reader": "reflowable",
+            "content_url": f"/api/v1/library/books/{book_id}/files/{file_id}/content",
+            "download_url": f"/api/v1/library/books/{book_id}/files/{file_id}/download",
+        }
+    ]
+
+    content = client.get(
+        f"/api/v1/library/books/{book_id}/files/{file_id}/content",
+        headers={"Range": "bytes=2-5"},
+    )
+    assert content.status_code == 206
+    assert content.data == b"2345"
+    assert content.headers["Content-Range"] == "bytes 2-5/10"
+    assert content.headers["Accept-Ranges"] == "bytes"
+    assert content.headers["Content-Type"].startswith("application/epub+zip")
+    assert content.headers["Content-Disposition"].startswith("inline;")
+
+    head = client.head(f"/api/v1/library/books/{book_id}/files/{file_id}/content")
+    assert head.status_code == 200
+    assert head.data == b""
+    assert head.headers["Accept-Ranges"] == "bytes"
+
+    download = client.get(f"/api/v1/library/books/{book_id}/files/{file_id}/download")
+    assert download.status_code == 200
+    assert download.data == b"0123456789"
+    assert download.headers["Content-Disposition"].startswith("attachment;")
+
+    saved = client.patch(
+        f"/api/v1/users/me/reading-progress/{book_id}",
+        json={
+            "progression": 0.42,
+            "file_id": file_id,
+            "locator": {"value": "epubcfi(/6/4)", "type": "epubcfi"},
+            "client_updated_at": "2026-07-28T12:00:00+02:00",
+        },
+    )
+    assert saved.status_code == 200
+    assert saved.json["progress"]["progress"] == 42
+    assert saved.json["progress"]["file_id"] == file_id
+    assert saved.json["progress"]["locator"] == {
+        "value": "epubcfi(/6/4)",
+        "type": "epubcfi",
+    }
+
+    stale = client.patch(
+        f"/api/v1/users/me/reading-progress/{book_id}",
+        json={
+            "progression": 0.1,
+            "reset": True,
+            "file_id": file_id,
+            "locator": {"value": "epubcfi(/6/2)", "type": "epubcfi"},
+            "client_updated_at": "2026-07-28T11:59:59+02:00",
+        },
+    )
+    assert stale.status_code == 200
+    assert stale.json["progress"]["progress"] == 42
+    assert stale.json["progress"]["locator"]["value"] == "epubcfi(/6/4)"
+
+    moved_back = client.patch(
+        f"/api/v1/users/me/reading-progress/{book_id}",
+        json={
+            "progression": 0.2,
+            "file_id": file_id,
+            "locator": {"value": "epubcfi(/6/3)", "type": "epubcfi"},
+            "client_updated_at": "2026-07-28T12:01:00+02:00",
+        },
+    )
+    assert moved_back.status_code == 200
+    assert moved_back.json["progress"]["progress"] == 20
+    assert moved_back.json["progress"]["locator"]["value"] == "epubcfi(/6/3)"
+
+    other_app = Flask(__name__)
+    other_app.config["TESTING"] = True
+    register_v1_api(
+        other_app,
+        database_path=path,
+        resolve_actor=lambda: V1Actor(other_user_id),
+        resolve_file_path=Path,
+    )
+    denied = other_app.test_client().get(f"/api/v1/library/books/{book_id}/files/{file_id}/content")
+    assert denied.status_code == 404
+
+
 def test_personal_library_search_filters_sort_and_total_are_server_side(tmp_path: Path) -> None:
     path, user_id, book_id = _database(tmp_path)
     app = Flask(__name__)

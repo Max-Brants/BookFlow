@@ -1,6 +1,11 @@
-/* BookFlow's PWA cache intentionally excludes API, authentication, downloads and covers. */
-const CACHE = 'bookflow-shell-v3';
+/*
+ * Reader files and progress are account-scoped in IndexedDB; this cache only
+ * contains the unsigned application shell. API responses, session data and
+ * cover URLs must never be added here.
+ */
+const CACHE = 'bookflow-shell-v4';
 const OFFLINE = new URL('offline.html', self.registration.scope).toString();
+const APP_SHELL = new URL('./', self.registration.scope).toString();
 const BUILD_ASSETS = __BOOKFLOW_PRECACHE__;
 const SHELL = [
   new URL('./', self.registration.scope).toString(),
@@ -25,7 +30,9 @@ self.addEventListener('fetch', (event) => {
   const request = event.request;
   if (request.method !== 'GET' || request.url.includes('/api/') || request.url.includes('/socket.io/') || request.destination === 'image') return;
   if (request.mode === 'navigate') {
-    event.respondWith(fetch(request).then((response) => response).catch(() => caches.match(OFFLINE)));
+    // A cached app shell lets the SPA resolve an offline reader route. The
+    // reader itself obtains its selected book from account-scoped IndexedDB.
+    event.respondWith(fetch(request).then((response) => response).catch(() => caches.match(APP_SHELL).then((cached) => cached || caches.match(OFFLINE))));
     return;
   }
   if (request.destination === 'script' || request.destination === 'style' || request.destination === 'font') {

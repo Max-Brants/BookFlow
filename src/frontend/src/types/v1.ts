@@ -17,7 +17,12 @@ export interface V1Page<T> {
 export interface V1ReadingProgress {
   book_id: number;
   progress: number;
+  progression?: number;
   active: 0 | 1;
+  completed?: boolean;
+  file_id?: number | null;
+  locator?: unknown;
+  reader_updated_at?: string | null;
   source: string;
   revision: number;
   updated_at: string;
@@ -268,6 +273,9 @@ export interface V1BookFile {
   mime_type: string | null;
   imported_at: string;
   granted_at: string;
+  browser_reader?: 'reflowable' | 'fixed' | null;
+  content_url?: string | null;
+  download_url?: string;
 }
 
 export interface V1Book {
