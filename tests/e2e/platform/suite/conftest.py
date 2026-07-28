@@ -167,10 +167,7 @@ print(json.dumps({"book_id": row[0], "session": serializer.dumps({"is_admin": Tr
         return data if isinstance(data, list) else []
 
     def queue_download(self, release: dict) -> requests.Response:
-        payload = dict(release)
-        if self.library_book_id is not None:
-            payload["library_book_id"] = self.library_book_id
-        return self.post("/api/releases/download", json=payload, timeout=30)
+        return self.post("/api/releases/download", json=release, timeout=30)
 
     def wait_for_terminal(self, book_id: str, timeout: int = DOWNLOAD_TIMEOUT) -> tuple[str, dict]:
         deadline = time.time() + timeout
