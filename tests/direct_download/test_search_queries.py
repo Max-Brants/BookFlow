@@ -1,3 +1,5 @@
+import pytest
+
 from bookflow.core.models import SearchFilters
 from bookflow.core.search_plan import build_release_search_plan
 from bookflow.metadata_providers import BookMetadata
@@ -26,6 +28,25 @@ def _enable_direct_download(monkeypatch):
 
 
 class TestDirectDownloadSearchQueries:
+    def test_parser_failures_are_not_silently_converted_to_empty_results(self, monkeypatch):
+        dd = _enable_direct_download(monkeypatch)
+
+        def fail_search(_query: str, _filters):
+            raise RuntimeError("No results table found")
+
+        monkeypatch.setattr(dd, "search_books", fail_search)
+        source = DirectDownloadSource()
+        book = BookMetadata(
+            provider="hardcover",
+            provider_id="123",
+            title="Mistborn",
+            authors=["Brandon Sanderson"],
+        )
+        plan = build_release_search_plan(book, manual_query="Mistborn")
+
+        with pytest.raises(RuntimeError, match="No results table found"):
+            source.search(book, plan)
+
     def test_uses_search_title_for_english_queries(self, monkeypatch):
         captured: list[str] = []
 

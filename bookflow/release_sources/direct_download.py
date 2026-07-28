@@ -1912,7 +1912,7 @@ class DirectDownloadSource(ReleaseSource):
                     if bi.id not in seen_ids:
                         seen_ids.add(bi.id)
                         all_results.append(bi)
-            except SearchUnavailableError:
+            except SearchUnavailableError, RuntimeError:
                 raise
             except Exception:
                 logger.exception("Search error")

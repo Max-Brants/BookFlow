@@ -191,6 +191,7 @@ print(json.dumps({"book_id": row[0], "session": serializer.dumps({"is_admin": Tr
 @pytest.fixture(scope="session")
 def client() -> PlatformClient:
     platform_client = PlatformClient()
+    platform_client.session.headers["Origin"] = BASE_URL
     if not platform_client.wait_for_health():
         pytest.fail(f"BookFlow not healthy at {BASE_URL} (profile={ACTIVE_PROFILE})")
     return platform_client
