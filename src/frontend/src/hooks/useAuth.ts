@@ -11,9 +11,10 @@ import { login, logout, checkAuth } from '../services/api';
 import type { LibraryCapability, LoginCredentials } from '../types';
 import { shouldEnableAuthenticatedServices } from '../utils/authenticatedServices';
 import { getReturnToFromSearch } from '../utils/authRedirect';
-import { useDependencyEffect, useMountEffect } from './useMountEffect';
+import { useDependencyEffect } from './useMountEffect';
 
 interface UseAuthOptions {
+  isOnline?: boolean;
   onLogoutSuccess?: () => void;
   showToast?: (message: string, type: 'info' | 'success' | 'error') => void;
 }
@@ -40,7 +41,7 @@ interface UseAuthReturn {
 }
 
 export function useAuth(options: UseAuthOptions = {}): UseAuthReturn {
-  const { onLogoutSuccess, showToast } = options;
+  const { isOnline = true, onLogoutSuccess, showToast } = options;
   const location = useLocation();
   const navigate = useNavigate();
   const { socket } = useSocket();
@@ -59,11 +60,13 @@ export function useAuth(options: UseAuthOptions = {}): UseAuthReturn {
   const [oidcAutoRedirect, setOidcAutoRedirect] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
-  const authenticatedServicesEnabled = shouldEnableAuthenticatedServices({
-    authChecked,
-    authRequired,
-    isAuthenticated,
-  });
+  const authenticatedServicesEnabled =
+    isOnline &&
+    shouldEnableAuthenticatedServices({
+      authChecked,
+      authRequired,
+      isAuthenticated,
+    });
 
   const applyAuthResponse = useCallback((response: Awaited<ReturnType<typeof checkAuth>>) => {
     setAuthRequired(response.auth_required !== false);
@@ -77,6 +80,43 @@ export function useAuth(options: UseAuthOptions = {}): UseAuthReturn {
     setHideLocalAuth(response.hide_local_auth || false);
     setOidcAutoRedirect(response.oidc_auto_redirect || false);
   }, []);
+
+  const applyCachedAuth = useCallback(async () => {
+    const cached = await readOfflinePwaBootstrap().catch(() => null);
+    if (cached) {
+      const capability =
+        cached.profile.libraryCapability === 'download-capable' ||
+        cached.profile.libraryCapability === 'request-only'
+          ? cached.profile.libraryCapability
+          : null;
+      setAuthRequired(true);
+      setIsAuthenticated(true);
+      setIsAdmin(cached.profile.isAdmin);
+      setLibraryCapability(capability);
+      setUsername(cached.profile.username);
+      setDisplayName(cached.profile.displayName);
+      return;
+    }
+    setAuthRequired(true);
+    setIsAuthenticated(false);
+    setIsAdmin(false);
+    setLibraryCapability(null);
+  }, []);
+
+  const verifyAuth = useCallback(async () => {
+    try {
+      if (isOnline) {
+        applyAuthResponse(await checkAuth());
+      } else {
+        await applyCachedAuth();
+      }
+    } catch (error) {
+      console.error('Auth check failed:', error);
+      await applyCachedAuth();
+    } finally {
+      setAuthChecked(true);
+    }
+  }, [applyAuthResponse, applyCachedAuth, isOnline]);
 
   // Do not consume network connections until authentication has been checked.
   // Connecting here also ensures the handshake sees the current session cookie.
@@ -93,42 +133,15 @@ export function useAuth(options: UseAuthOptions = {}): UseAuthReturn {
     socket.disconnect();
   }, [authenticatedServicesEnabled, socket]);
 
-  // Check authentication on mount
-  useMountEffect(() => {
-    const verifyAuth = async () => {
-      try {
-        applyAuthResponse(await checkAuth());
-      } catch (error) {
-        console.error('Auth check failed:', error);
-        const cached = await readOfflinePwaBootstrap().catch(() => null);
-        if (cached) {
-          const capability =
-            cached.profile.libraryCapability === 'download-capable' ||
-            cached.profile.libraryCapability === 'request-only'
-              ? cached.profile.libraryCapability
-              : null;
-          setAuthRequired(true);
-          setIsAuthenticated(true);
-          setIsAdmin(cached.profile.isAdmin);
-          setLibraryCapability(capability);
-          setUsername(cached.profile.username);
-          setDisplayName(cached.profile.displayName);
-        } else {
-          setAuthRequired(true);
-          setIsAuthenticated(false);
-          setIsAdmin(false);
-          setLibraryCapability(null);
-        }
-      } finally {
-        setAuthChecked(true);
-      }
-    };
+  // Check on mount, switch to the cached profile offline, and re-check when
+  // connectivity returns.
+  useDependencyEffect(() => {
     void verifyAuth();
-  });
+  }, [verifyAuth]);
 
   // Re-sync auth when returning to the tab, so role/session changes in
   // another tab/profile don't leave stale local auth state.
-  useMountEffect(() => {
+  useDependencyEffect(() => {
     const verifyAuthOnFocus = async () => {
       try {
         applyAuthResponse(await checkAuth());
@@ -138,11 +151,11 @@ export function useAuth(options: UseAuthOptions = {}): UseAuthReturn {
     };
 
     const handleFocus = () => {
-      void verifyAuthOnFocus();
+      if (isOnline) void verifyAuthOnFocus();
     };
 
     const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
+      if (isOnline && document.visibilityState === 'visible') {
         void verifyAuthOnFocus();
       }
     };
@@ -153,15 +166,16 @@ export function useAuth(options: UseAuthOptions = {}): UseAuthReturn {
       window.removeEventListener('focus', handleFocus);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  });
+  }, [isOnline]);
 
   const refreshAuth = useCallback(async () => {
+    if (!isOnline) return;
     try {
       applyAuthResponse(await checkAuth());
     } catch (error) {
       console.error('Auth refresh failed:', error);
     }
-  }, [applyAuthResponse]);
+  }, [applyAuthResponse, isOnline]);
 
   const handleLogin = useCallback(
     async (credentials: LoginCredentials) => {

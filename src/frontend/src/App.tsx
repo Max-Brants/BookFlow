@@ -8,6 +8,7 @@ import { OnboardingModal } from './components/OnboardingModal';
 import { PwaControls } from './components/PwaControls';
 import { ToastContainer } from './components/ToastContainer';
 import { useLanguage } from './contexts/LanguageContext';
+import { useNetworkStatus } from './contexts/NetworkStatusContext';
 import { useShowOnboardingDebug } from './hooks/app/useShowOnboardingDebug';
 import { useStatusChangeNotifications } from './hooks/app/useStatusChangeNotifications';
 import { useAuth } from './hooks/useAuth';
@@ -20,7 +21,7 @@ import { primeUsersCache } from './hooks/useUsersFetch';
 import { LibraryNavigation } from './library/LibraryNavigation';
 import { LibraryPage } from './library/LibraryPage';
 import { readOfflinePwaBootstrap, saveOfflinePwaBootstrap } from './library/offline';
-import { OfflineReadingCoordinator } from './library/offline/OfflineReadingCoordinator';
+import { OfflineReadingProvider } from './library/offline/OfflineReadingCoordinator';
 import { AdminDownloadsPage } from './pages/AdminDownloadsPage';
 import { AdminSettingsPage } from './pages/AdminSettingsPage';
 import { AdminUserDetailPage } from './pages/AdminUserDetailPage';
@@ -31,6 +32,7 @@ import { CatalogPage } from './pages/CatalogPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { LoginPage } from './pages/LoginPage';
 import { MonitorsPage } from './pages/MonitorsPage';
+import { OfflineHomePage } from './pages/OfflineHomePage';
 import { ReleaseProfilesPage } from './pages/ReleaseProfilesPage';
 import { RequestsPage } from './pages/RequestsPage';
 import { SelfSettingsPage } from './pages/SelfSettingsPage';
@@ -73,6 +75,7 @@ const LegacyLibraryBookRedirect = () => {
 function App() {
   const location = useLocation();
   const navigate = useNavigate();
+  const { isOnline } = useNetworkStatus();
   const { toasts, showToast, removeToast } = useToast();
   const { setLanguage, t } = useLanguage();
   const {
@@ -93,7 +96,7 @@ function App() {
     refreshAuth,
     handleLogin,
     handleLogout,
-  } = useAuth({ showToast });
+  } = useAuth({ isOnline, showToast });
   const { status: currentStatus, forceRefresh: fetchStatus } = useRealtimeStatus({
     enabled: authenticatedServicesEnabled,
     pollInterval: 5000,
@@ -109,6 +112,14 @@ function App() {
   useShowOnboardingDebug({ setOnboardingOpen });
 
   const loadConfig = useCallback(async () => {
+    if (!isOnline) {
+      const cached = await readOfflinePwaBootstrap().catch(() => null);
+      if (cached) {
+        setConfig(cached.config);
+        setLanguage(cached.config.default_ui_language ?? 'en');
+      }
+      return;
+    }
     try {
       const [nextConfig, personalSettings] = await Promise.all([
         getConfig(),
@@ -137,16 +148,16 @@ function App() {
       const cached = await readOfflinePwaBootstrap().catch(() => null);
       if (cached) setConfig(cached.config);
     }
-  }, [authRequired, displayName, isAdmin, libraryCapability, setLanguage, username]);
+  }, [authRequired, displayName, isAdmin, isOnline, libraryCapability, setLanguage, username]);
 
   useDependencyEffect(() => {
     if (!isAuthenticated) return;
-    void fetchStatus();
+    if (isOnline) void fetchStatus();
     void loadConfig();
-  }, [fetchStatus, isAuthenticated, loadConfig]);
+  }, [fetchStatus, isAuthenticated, isOnline, loadConfig]);
 
   useDependencyEffect(() => {
-    if (!isAuthenticated) {
+    if (!isAuthenticated || !isOnline) {
       setKoboEnabled(false);
       return;
     }
@@ -154,7 +165,7 @@ function App() {
       .koboSettings()
       .then((settings) => setKoboEnabled(settings.enabled))
       .catch(() => setKoboEnabled(false));
-  }, [isAuthenticated]);
+  }, [isAuthenticated, isOnline]);
 
   useStatusChangeNotifications({
     currentStatus,
@@ -183,9 +194,8 @@ function App() {
     );
   }
 
-  const app = (
+  const onlineApp = (
     <>
-      <OfflineReadingCoordinator accountId={username ?? 'local'} />
       <div className="fixed top-0 right-0 left-0 z-40">
         <Header
           debug={config?.debug}
@@ -363,6 +373,22 @@ function App() {
       <ToastContainer toasts={toasts} />
       <PwaControls />
     </>
+  );
+  const accountId = username ?? 'local';
+  const app = (
+    <OfflineReadingProvider accountId={accountId}>
+      {isOnline ? (
+        onlineApp
+      ) : (
+        <Routes>
+          <Route
+            path="/library/:bookId/read/:fileId"
+            element={<ReaderPage accountId={accountId} />}
+          />
+          <Route path="*" element={<OfflineHomePage />} />
+        </Routes>
+      )}
+    </OfflineReadingProvider>
   );
 
   const postLoginPath = getReturnToFromSearch(location.search);

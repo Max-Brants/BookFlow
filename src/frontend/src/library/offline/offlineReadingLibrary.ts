@@ -92,7 +92,8 @@ export class OfflineReadingLibrary {
     return books
       .filter((book) => !book.progress.completed)
       .toSorted(
-        (left, right) => Date.parse(right.lastAccessedAt) - Date.parse(left.lastAccessedAt),
+        (left, right) =>
+          Date.parse(right.progress.lastReadAt) - Date.parse(left.progress.lastReadAt),
       );
   }
 
