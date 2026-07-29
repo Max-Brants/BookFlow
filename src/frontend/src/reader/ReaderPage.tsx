@@ -1,7 +1,6 @@
 import { useCallback, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 
-import { useLanguage } from '../contexts/LanguageContext';
 import { useDependencyEffect } from '../hooks/useMountEffect';
 import {
   offlineReadingLibrary,
@@ -13,7 +12,7 @@ import {
 import { v1Api } from '../services/v1Api';
 import { readerAdapterFactory } from './adapters/readerAdapterFactory';
 import { BrowserReader } from './components/BrowserReader';
-import { bookFileFromBlob, downloadBookFile, fetchBookFile, shareBookFile } from './fileActions';
+import { bookFileFromBlob, downloadBookFile, fetchBookFile } from './fileActions';
 import { canReadInBrowser } from './formatCapabilities';
 import { getReaderProgress, readerFileFromV1, readerLocatorForOpen } from './readerApi';
 import { loadReaderLocator, saveReaderLocator } from './readerLocatorStore';
@@ -40,18 +39,13 @@ interface ReaderOpenState {
 }
 
 export const ReaderPage = ({ accountId }: ReaderPageProps) => {
-  const { t } = useLanguage();
   const { bookId: rawBookId, fileId: rawFileId } = useParams();
   const navigate = useNavigate();
   const [openState, setOpenState] = useState<ReaderOpenState | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [actionFileState, setActionFileState] = useState<'preparing' | 'ready' | 'failed'>(
-    'preparing',
-  );
   const pendingProgress = useRef<ReaderProgress | null>(null);
   const timer = useRef<number | null>(null);
   const objectUrl = useRef<string | null>(null);
-  const preparedActionFile = useRef<File | null>(null);
 
   const bookId = positiveId(rawBookId);
   const fileId = positiveId(rawFileId);
@@ -204,30 +198,6 @@ export const ReaderPage = ({ accountId }: ReaderPageProps) => {
     return fetchBookFile(v1Api.libraryFileDownloadUrl(bookId, fileId), file.title, file.format);
   }, [accountId, bookId, file, fileId]);
 
-  // Keep an actual File, rather than a promise, ready before the toolbar is
-  // tapped. Android Chrome's Web Share API requires the call to happen in the
-  // original transient user-activation task.
-  useDependencyEffect(() => {
-    let cancelled = false;
-    preparedActionFile.current = null;
-    if (!file) return undefined;
-    setActionFileState('preparing');
-    void loadActionFile().then(
-      (preparedFile) => {
-        if (cancelled) return;
-        preparedActionFile.current = preparedFile;
-        setActionFileState('ready');
-      },
-      () => {
-        if (!cancelled) setActionFileState('failed');
-      },
-    );
-    return () => {
-      cancelled = true;
-      preparedActionFile.current = null;
-    };
-  }, [file, loadActionFile]);
-
   if (error) {
     return (
       <div className="p-8">
@@ -256,18 +226,7 @@ export const ReaderPage = ({ accountId }: ReaderPageProps) => {
         void navigate(`/library/${file.bookId}`);
       }}
       onProgressChange={scheduleProgress}
-      onDownload={async () =>
-        downloadBookFile(preparedActionFile.current ?? (await loadActionFile()))
-      }
-      onShare={() => {
-        const preparedFile = preparedActionFile.current;
-        if (preparedFile) return shareBookFile(preparedFile, file.title);
-        const status =
-          actionFileState === 'failed'
-            ? t('catalogDetail.sharePreparationFailed')
-            : t('catalogDetail.sharePreparationPending');
-        return Promise.reject(new Error(status));
-      }}
+      onDownload={async () => downloadBookFile(await loadActionFile())}
     />
   );
 };

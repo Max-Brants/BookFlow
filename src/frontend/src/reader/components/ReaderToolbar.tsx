@@ -15,7 +15,6 @@ interface ReaderToolbarProps {
   onToggleSettings: () => void;
   onToggleFullscreen: () => void;
   onDownload: () => Promise<void>;
-  onShare: () => Promise<void>;
 }
 
 const desktopButtonClass =
@@ -75,10 +74,9 @@ export const ReaderToolbar = ({
   onToggleSettings,
   onToggleFullscreen,
   onDownload,
-  onShare,
 }: ReaderToolbarProps) => {
   const { t } = useLanguage();
-  const [busyAction, setBusyAction] = useState<'download' | 'share' | null>(null);
+  const [downloading, setDownloading] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionsOpen, setActionsOpen] = useState(false);
   const actionsRef = useRef<HTMLDivElement>(null);
@@ -91,15 +89,15 @@ export const ReaderToolbar = ({
 
   useDismiss(actionsOpen, [actionsRef], closeActions);
 
-  const runAction = (kind: 'download' | 'share', action: () => Promise<void>) => {
-    setBusyAction(kind);
+  const runDownload = () => {
+    setDownloading(true);
     setActionError(null);
-    void action()
+    void onDownload()
       .catch((caught: unknown) => {
         if (caught instanceof DOMException && caught.name === 'AbortError') return;
         setActionError(caught instanceof Error ? caught.message : t('webReader.actionFailed'));
       })
-      .finally(() => setBusyAction(null));
+      .finally(() => setDownloading(false));
   };
 
   const menuAction = (action: () => void) => {
@@ -142,18 +140,10 @@ export const ReaderToolbar = ({
             <button
               type="button"
               className={desktopButtonClass}
-              disabled={busyAction !== null}
-              onClick={() => runAction('download', onDownload)}
+              disabled={downloading}
+              onClick={runDownload}
             >
-              {busyAction === 'download' ? t('webReader.downloading') : t('webReader.download')}
-            </button>
-            <button
-              type="button"
-              className={desktopButtonClass}
-              disabled={busyAction !== null}
-              onClick={() => runAction('share', onShare)}
-            >
-              {busyAction === 'share' ? t('webReader.opening') : t('webReader.openOtherApp')}
+              {downloading ? t('webReader.downloading') : t('webReader.download')}
             </button>
             <button type="button" className={desktopButtonClass} onClick={onToggleToc}>
               {t('webReader.contents')}
@@ -191,19 +181,10 @@ export const ReaderToolbar = ({
                   role="menuitem"
                   type="button"
                   className={menuItemClass}
-                  disabled={busyAction !== null}
-                  onClick={() => menuAction(() => runAction('download', onDownload))}
+                  disabled={downloading}
+                  onClick={() => menuAction(runDownload)}
                 >
                   {t('webReader.download')}
-                </button>
-                <button
-                  role="menuitem"
-                  type="button"
-                  className={menuItemClass}
-                  disabled={busyAction !== null}
-                  onClick={() => menuAction(() => runAction('share', onShare))}
-                >
-                  {t('webReader.openOtherApp')}
                 </button>
                 <button
                   role="menuitem"

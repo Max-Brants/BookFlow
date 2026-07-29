@@ -26,7 +26,6 @@ const renderToolbar = (overrides: Partial<React.ComponentProps<typeof ReaderTool
     onToggleSettings: vi.fn(),
     onToggleFullscreen: vi.fn(),
     onDownload: vi.fn().mockResolvedValue(undefined),
-    onShare: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
   render(
@@ -54,9 +53,10 @@ describe('ReaderToolbar', () => {
     expect(
       screen.getByRole('button', { name: 'More reader actions' }).getAttribute('aria-expanded'),
     ).toBe('false');
-    for (const name of ['Download', 'Open in another app', 'Contents', 'Display', 'Fullscreen']) {
+    for (const name of ['Download', 'Contents', 'Display', 'Fullscreen']) {
       expect(screen.getByRole('button', { name })).toBeTruthy();
     }
+    expect(screen.queryByRole('button', { name: 'Open in another app' })).toBeNull();
     expect(screen.queryByRole('menu')).toBeNull();
   });
 
@@ -96,7 +96,7 @@ describe('ReaderToolbar', () => {
 
     const menu = screen.getByRole('menu', { name: 'Reader actions' });
     const items = screen.getAllByRole('menuitem');
-    expect(items).toHaveLength(5);
+    expect(items).toHaveLength(4);
     expect(document.activeElement).toBe(items[0]);
     fireEvent.keyDown(menu, { key: 'End' });
     expect(document.activeElement).toBe(items.at(-1));
