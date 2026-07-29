@@ -14,7 +14,7 @@ import { readerAdapterFactory } from './adapters/readerAdapterFactory';
 import { BrowserReader } from './components/BrowserReader';
 import { bookFileFromBlob, downloadBookFile, fetchBookFile, shareBookFile } from './fileActions';
 import { canReadInBrowser } from './formatCapabilities';
-import { getReaderProgress, readerFileFromV1 } from './readerApi';
+import { getReaderProgress, readerFileFromV1, readerLocatorForOpen } from './readerApi';
 import { loadReaderLocator, saveReaderLocator } from './readerLocatorStore';
 import type { ReaderFile, ReaderLocator, ReaderProgress } from './types';
 
@@ -32,11 +32,16 @@ interface ReaderPageProps {
   accountId: string;
 }
 
+interface ReaderOpenState {
+  file: ReaderFile;
+  /** `null` is a completed decision: it means no previous locator exists. */
+  initialLocator: ReaderLocator | null;
+}
+
 export const ReaderPage = ({ accountId }: ReaderPageProps) => {
   const { bookId: rawBookId, fileId: rawFileId } = useParams();
   const navigate = useNavigate();
-  const [file, setFile] = useState<ReaderFile | null>(null);
-  const [initialLocator, setInitialLocator] = useState<ReaderLocator | null>(null);
+  const [openState, setOpenState] = useState<ReaderOpenState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const pendingProgress = useRef<ReaderProgress | null>(null);
   const timer = useRef<number | null>(null);
@@ -44,6 +49,7 @@ export const ReaderPage = ({ accountId }: ReaderPageProps) => {
 
   const bookId = positiveId(rawBookId);
   const fileId = positiveId(rawFileId);
+  const file = openState?.file ?? null;
 
   const flushProgress = useCallback(async () => {
     if (!bookId || !fileId || !pendingProgress.current) return;
@@ -69,28 +75,32 @@ export const ReaderPage = ({ accountId }: ReaderPageProps) => {
       return undefined;
     }
     let cancelled = false;
+    setError(null);
+    setOpenState(null);
     const releaseOfflineProtection = protectOfflineReaderFile(fileId);
     const openCached = async () => {
       const cached = await offlineReadingLibrary.getBook(accountId, fileId);
       if (!cached || cancelled) return false;
       objectUrl.current = URL.createObjectURL(cached.content);
-      setFile({
-        bookId: cached.bookId,
-        fileId: cached.fileId,
-        title: cached.title,
-        author: cached.author,
-        format: cached.format,
-        contentUrl: objectUrl.current,
-        etag: cached.etag,
-      });
-      setInitialLocator({
-        value: cached.progress.locator,
-        progression: cached.progress.progression,
+      setOpenState({
+        file: {
+          bookId: cached.bookId,
+          fileId: cached.fileId,
+          title: cached.title,
+          author: cached.author,
+          format: cached.format,
+          contentUrl: objectUrl.current,
+          etag: cached.etag,
+        },
+        initialLocator: {
+          value: cached.progress.locator,
+          progression: cached.progress.progression,
+        },
       });
       return true;
     };
 
-    void Promise.all([v1Api.book(bookId), getReaderProgress(bookId)]).then(
+    void Promise.all([v1Api.book(bookId), getReaderProgress(bookId, fileId)]).then(
       async ([detail, serverProgress]) => {
         if (cancelled) return;
         const selected = detail.files.find((entry) => entry.id === fileId);
@@ -102,21 +112,17 @@ export const ReaderPage = ({ accountId }: ReaderPageProps) => {
           setError(`${selected.file_format.toUpperCase()} is not supported by the browser reader.`);
           return;
         }
-        setFile(
-          readerFileFromV1({
-            bookId,
-            fileId,
-            title: detail.book.title,
-            author: detail.book.author,
-            format: selected.file_format,
-          }),
-        );
-        setInitialLocator(
-          loadReaderLocator(bookId, fileId) ??
-            (serverProgress
-              ? { value: serverProgress.value, progression: serverProgress.progression }
-              : null),
-        );
+        const readerFile = readerFileFromV1({
+          bookId,
+          fileId,
+          title: detail.book.title,
+          author: detail.book.author,
+          format: selected.file_format,
+        });
+        setOpenState({
+          file: readerFile,
+          initialLocator: readerLocatorForOpen(loadReaderLocator(bookId, fileId), serverProgress),
+        });
         const cached = await offlineReadingLibrary.getBook(accountId, fileId);
         const progress = serverProgress
           ? {
@@ -134,13 +140,7 @@ export const ReaderPage = ({ accountId }: ReaderPageProps) => {
           author: detail.book.author,
           format: selected.file_format,
           coverUrl: detail.book.cover_url,
-          contentUrl: readerFileFromV1({
-            bookId,
-            fileId,
-            title: detail.book.title,
-            author: detail.book.author,
-            format: selected.file_format,
-          }).contentUrl,
+          contentUrl: readerFile.contentUrl,
           progress,
         };
         void (
@@ -220,7 +220,7 @@ export const ReaderPage = ({ accountId }: ReaderPageProps) => {
   return (
     <BrowserReader
       file={file}
-      initialLocator={initialLocator}
+      initialLocator={openState?.initialLocator}
       adapterFactory={readerAdapterFactory}
       onBack={() => {
         void navigate(`/library/${file.bookId}`);

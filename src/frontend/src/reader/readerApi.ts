@@ -1,6 +1,6 @@
 import { v1Api } from '../services/v1Api';
 import { getApiBase } from '../utils/basePath';
-import type { ReaderFile, ReaderProgress } from './types';
+import type { ReaderFile, ReaderLocator, ReaderProgress } from './types';
 
 const locatorValue = (locator: unknown): string => {
   if (!locator || typeof locator !== 'object' || !('value' in locator)) return '';
@@ -11,23 +11,39 @@ const readerContentUrl = (bookId: number, fileId: number): string =>
   `${getApiBase()}/v1/library/books/${bookId}/files/${fileId}/content`;
 
 /**
- * The initial reader API deliberately uses BookFlow's existing, book-scoped
- * progress endpoint. A device-local locator preserves the exact location until
- * the server accepts locators in a future API revision.
+ * Reading progress remains book-scoped for dashboard and Kobo compatibility.
+ * The file ID guards exact locators while device-local positions can take
+ * precedence for the same file.
  */
-export const getReaderProgress = async (bookId: number): Promise<ReaderProgress | null> => {
+export const getReaderProgress = async (
+  bookId: number,
+  fileId: number,
+): Promise<ReaderProgress | null> => {
   try {
     const { progress } = await v1Api.readingProgressForBook(bookId);
+    const exactFile = progress.file_id === fileId;
     return {
-      value: locatorValue(progress.locator),
+      // The API keeps progress book-scoped for dashboard/Kobo compatibility,
+      // but an exact locator is only valid for the file that produced it.
+      value: exactFile ? locatorValue(progress.locator) : '',
       progression: progress.progression ?? progress.progress / 100,
       completed: progress.completed ?? progress.active === 0,
       updatedAt: progress.reader_updated_at ?? progress.updated_at,
+      fileId: progress.file_id ?? null,
     };
   } catch {
     return null;
   }
 };
+
+export const readerLocatorForOpen = (
+  localLocator: ReaderLocator | null,
+  serverProgress: ReaderProgress | null,
+): ReaderLocator | null =>
+  localLocator ??
+  (serverProgress
+    ? { value: serverProgress.value, progression: serverProgress.progression }
+    : null);
 
 export const saveReaderProgress = async (
   bookId: number,
