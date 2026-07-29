@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import tempfile
+from contextlib import closing
 
 import pytest
 
@@ -252,6 +253,152 @@ def test_remove_from_library_hard_deletes_membership(library_service, user_db):
     assert removed is True
     assert repeat is False
     assert not library_service.is_in_library(user_id=user["id"], book_id=book["id"])
+
+
+def test_remove_from_library_records_active_kobo_deletion(library_service, user_db, db_path):
+    alice = user_db.create_user(username="alice")
+    bob = user_db.create_user(username="bob")
+    book = _insert_book(library_service)
+    library_service.add_to_library(user_id=alice["id"], book_id=book["id"])
+    library_service.add_to_library(user_id=bob["id"], book_id=book["id"])
+
+    with closing(sqlite3.connect(db_path)) as conn:
+        file_id = int(
+            conn.execute(
+                "SELECT id FROM book_files WHERE book_id = ? ORDER BY id LIMIT 1",
+                (book["id"],),
+            ).fetchone()[0]
+        )
+        for user_id in (alice["id"], bob["id"]):
+            conn.execute(
+                """
+                INSERT INTO user_kobo_settings (user_id, enabled, current_revision)
+                VALUES (?, 1, 1)
+                """,
+                (user_id,),
+            )
+            conn.execute(
+                """
+                INSERT INTO user_kobo_books (
+                    user_id, book_id, file_id, desired_state, source, revision
+                ) VALUES (?, ?, ?, 'active', 'manual', 1)
+                """,
+                (user_id, book["id"], file_id),
+            )
+            conn.execute(
+                """
+                INSERT INTO user_kobo_changes (
+                    user_id, revision, change_type, book_id, file_id, payload_json
+                ) VALUES (?, 1, 'upsert', ?, ?, '{}')
+                """,
+                (user_id, book["id"], file_id),
+            )
+        conn.commit()
+
+    assert library_service.remove_from_library(user_id=alice["id"], book_id=book["id"])
+
+    with closing(sqlite3.connect(db_path)) as conn:
+        alice_state = conn.execute(
+            """
+            SELECT desired_state, file_id, source, revision
+            FROM user_kobo_books WHERE user_id = ? AND book_id = ?
+            """,
+            (alice["id"], book["id"]),
+        ).fetchone()
+        alice_changes = conn.execute(
+            """
+            SELECT revision, change_type, payload_json
+            FROM user_kobo_changes WHERE user_id = ? ORDER BY revision
+            """,
+            (alice["id"],),
+        ).fetchall()
+        bob_state = conn.execute(
+            """
+            SELECT desired_state, revision FROM user_kobo_books
+            WHERE user_id = ? AND book_id = ?
+            """,
+            (bob["id"], book["id"]),
+        ).fetchone()
+
+    assert alice_state == ("deleted", None, "library_removal", 2)
+    assert [change[:2] for change in alice_changes] == [(1, "upsert"), (2, "delete")]
+    assert '"source": "library_removal"' in alice_changes[-1][2]
+    assert bob_state == ("active", 1)
+    assert library_service.is_in_library(user_id=bob["id"], book_id=book["id"])
+
+
+def test_remove_from_library_rolls_back_kobo_deletion_on_failure(
+    library_service, user_db, db_path
+):
+    user = user_db.create_user(username="alice")
+    book = _insert_book(library_service)
+    library_service.add_to_library(user_id=user["id"], book_id=book["id"])
+
+    with closing(sqlite3.connect(db_path)) as conn:
+        file_id = int(
+            conn.execute(
+                "SELECT id FROM book_files WHERE book_id = ? ORDER BY id LIMIT 1",
+                (book["id"],),
+            ).fetchone()[0]
+        )
+        conn.execute(
+            """
+            INSERT INTO user_kobo_settings (user_id, enabled, current_revision)
+            VALUES (?, 1, 1)
+            """,
+            (user["id"],),
+        )
+        conn.execute(
+            """
+            INSERT INTO user_kobo_books (
+                user_id, book_id, file_id, desired_state, source, revision
+            ) VALUES (?, ?, ?, 'active', 'manual', 1)
+            """,
+            (user["id"], book["id"], file_id),
+        )
+        conn.execute(
+            """
+            INSERT INTO user_kobo_changes (
+                user_id, revision, change_type, book_id, file_id, payload_json
+            ) VALUES (?, 1, 'upsert', ?, ?, '{}')
+            """,
+            (user["id"], book["id"], file_id),
+        )
+        conn.execute(
+            """
+            CREATE TRIGGER fail_library_removal
+            BEFORE DELETE ON user_library
+            BEGIN
+                SELECT RAISE(ABORT, 'forced library removal failure');
+            END
+            """
+        )
+        conn.commit()
+
+    with pytest.raises(sqlite3.IntegrityError, match="forced library removal failure"):
+        library_service.remove_from_library(user_id=user["id"], book_id=book["id"])
+
+    with closing(sqlite3.connect(db_path)) as conn:
+        state = conn.execute(
+            """
+            SELECT desired_state, revision FROM user_kobo_books
+            WHERE user_id = ? AND book_id = ?
+            """,
+            (user["id"], book["id"]),
+        ).fetchone()
+        revision = conn.execute(
+            "SELECT current_revision FROM user_kobo_settings WHERE user_id = ?",
+            (user["id"],),
+        ).fetchone()[0]
+        change_count = conn.execute(
+            "SELECT COUNT(*) FROM user_kobo_changes WHERE user_id = ?",
+            (user["id"],),
+        ).fetchone()[0]
+
+    assert state == ("active", 1)
+    assert revision == 1
+    assert change_count == 1
+    assert library_service.is_in_library(user_id=user["id"], book_id=book["id"])
 
 
 def test_list_library_books_admin_sees_all_others_see_own(library_service, user_db):

@@ -1,4 +1,4 @@
-import { NavLink } from 'react-router-dom';
+import { NavLink, useLocation } from 'react-router-dom';
 
 import bookFlowMark from '../assets/bookflow-mark-white.png';
 import { useLanguage } from '../contexts/LanguageContext';
@@ -33,6 +33,7 @@ export const LibraryNavigation = ({
   koboEnabled = false,
 }: LibraryNavigationProps) => {
   const { t } = useLanguage();
+  const location = useLocation();
   return (
     <>
       <button
@@ -78,6 +79,18 @@ export const LibraryNavigation = ({
           <NavLink to="/catalog" className={itemClassName} onClick={onClose}>
             <NavGlyph>◫</NavGlyph>
             {t('nav.catalog')}
+          </NavLink>
+          <NavLink
+            to="/suggestions/overall"
+            className={({ isActive }) =>
+              itemClassName({
+                isActive: isActive || location.pathname.startsWith('/suggestions/'),
+              })
+            }
+            onClick={onClose}
+          >
+            <NavGlyph>✦</NavGlyph>
+            {t('nav.trending')}
           </NavLink>
           <NavLink to="/monitors" className={itemClassName} onClick={onClose}>
             <NavGlyph>◇</NavGlyph>

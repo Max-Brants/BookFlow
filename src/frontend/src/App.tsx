@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 
 import { ConfigSetupBanner } from './components/ConfigSetupBanner';
 import { Footer } from './components/Footer';
@@ -40,35 +40,9 @@ import { cancelDownload, getConfig, getSelfSettings, retryDownload } from './ser
 import { v1Api } from './services/v1Api';
 import type { AppConfig } from './types';
 import { buildLoginRedirectPath, getReturnToFromSearch } from './utils/authRedirect';
-import { catalogBookPath } from './utils/catalogBookPath';
 
 // oxlint-disable-next-line import/no-unassigned-import
 import './styles.css';
-
-/** Preserve old links while making the catalog ISBN detail the single book UI. */
-const LegacyLibraryBookRedirect = () => {
-  const { bookId } = useParams();
-  const location = useLocation();
-  const navigate = useNavigate();
-  const { t } = useLanguage();
-  useDependencyEffect(() => {
-    const id = Number(bookId);
-    if (!Number.isInteger(id) || id < 1) {
-      void navigate('/library', { replace: true });
-      return;
-    }
-    void v1Api
-      .catalogBook(id)
-      .then((detail) =>
-        navigate(catalogBookPath(detail.book), {
-          replace: true,
-          state: location.state as unknown,
-        }),
-      )
-      .catch(() => navigate('/library', { replace: true }));
-  }, [bookId, location.state, navigate]);
-  return <p className="py-10 text-sm opacity-65">{t('common.loading')}</p>;
-};
 
 function App() {
   const location = useLocation();
@@ -235,22 +209,69 @@ function App() {
             <Route path="/" element={<DashboardPage />} />
             <Route path="/library" element={<LibraryPage koboEnabled={koboEnabled} />} />
             <Route
+              path="/library/:bookId"
+              element={
+                <CatalogBookPage
+                  canAddToLibrary
+                  context="library"
+                  isAdmin={isAdmin}
+                  koboEnabled={koboEnabled}
+                />
+              }
+            />
+            <Route
               path="/library/:bookId/read/:fileId"
               element={<ReaderPage accountId={username ?? 'local'} />}
             />
             <Route path="/kobo" element={<LibraryPage koboEnabled={koboEnabled} koboOnly />} />
+            <Route
+              path="/kobo/:bookId"
+              element={
+                <CatalogBookPage
+                  canAddToLibrary
+                  context="kobo"
+                  isAdmin={isAdmin}
+                  koboEnabled={koboEnabled}
+                />
+              }
+            />
             <Route path="/catalog" element={<CatalogPage />} />
             <Route path="/catalog/authors" element={<CatalogEntitiesPage kind="authors" />} />
             <Route path="/catalog/series" element={<CatalogEntitiesPage kind="series" />} />
             <Route
               path="/catalog/:bookId"
-              element={<CatalogBookPage canAddToLibrary isAdmin={isAdmin} />}
+              element={
+                <CatalogBookPage
+                  canAddToLibrary
+                  context="catalog"
+                  isAdmin={isAdmin}
+                  koboEnabled={koboEnabled}
+                />
+              }
             />
             <Route
               path="/catalog/isbn/:isbn"
-              element={<CatalogBookPage canAddToLibrary isAdmin={isAdmin} />}
+              element={
+                <CatalogBookPage
+                  canAddToLibrary
+                  context="catalog"
+                  isAdmin={isAdmin}
+                  koboEnabled={koboEnabled}
+                />
+              }
             />
             <Route path="/suggestions" element={<Navigate to="/suggestions/overall" replace />} />
+            <Route
+              path="/suggestions/:listKey/:bookId"
+              element={
+                <CatalogBookPage
+                  canAddToLibrary
+                  context="trending"
+                  isAdmin={isAdmin}
+                  koboEnabled={koboEnabled}
+                />
+              }
+            />
             <Route path="/suggestions/:listKey" element={<SuggestionsPage />} />
             <Route
               path="/monitors"
@@ -335,7 +356,6 @@ function App() {
                 }
               />
             )}
-            <Route path="/library/:bookId" element={<LegacyLibraryBookRedirect />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </main>

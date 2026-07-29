@@ -73,4 +73,34 @@ describe('navigation and personal-settings contracts', () => {
     expect(settingsModal).toContain('<AdminOperationsPage embedded />');
     expect(settingsModal).toContain("requestedTab === 'system-operations'");
   });
+
+  it('keeps contextual book details in their owning navigation sections', async () => {
+    const [app, navigation, discover, suggestions, library, dashboard] = await Promise.all([
+      readSource('App.tsx'),
+      readSource('library/LibraryNavigation.tsx'),
+      readSource('components/DiscoverNavigation.tsx'),
+      readSource('pages/SuggestionsPage.tsx'),
+      readSource('library/LibraryPage.tsx'),
+      readSource('pages/DashboardPage.tsx'),
+    ]);
+
+    expect(app).toContain('path="/library/:bookId"');
+    expect(app).toContain('path="/kobo/:bookId"');
+    expect(app).toContain('path="/suggestions/:listKey/:bookId"');
+    expect(app).not.toContain('LegacyLibraryBookRedirect');
+
+    const catalogPosition = navigation.indexOf('to="/catalog"');
+    const trendingPosition = navigation.indexOf('to="/suggestions/overall"');
+    const followingPosition = navigation.indexOf('to="/monitors"');
+    expect(catalogPosition).toBeGreaterThan(-1);
+    expect(trendingPosition).toBeGreaterThan(catalogPosition);
+    expect(followingPosition).toBeGreaterThan(trendingPosition);
+    expect(navigation).toContain("location.pathname.startsWith('/suggestions/')");
+
+    expect(discover).not.toContain('/suggestions/overall');
+    expect(suggestions).not.toContain('<DiscoverNavigation');
+    expect(suggestions).toContain("contextualBookPath('trending'");
+    expect(library).toMatch(/koboOnly \? `\/kobo\/\$\{book\.id\}` : `\/library\/\$\{book\.id\}`/);
+    expect(dashboard).toMatch(/to=\{`\/suggestions\/overall\/\$\{book\.id\}`\}/);
+  });
 });
