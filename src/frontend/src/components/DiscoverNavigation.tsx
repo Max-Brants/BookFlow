@@ -26,9 +26,6 @@ export const DiscoverNavigation = () => {
       <NavLink to="/catalog/series" className={tabClassName}>
         {t('catalog.browseSeries')}
       </NavLink>
-      <NavLink to="/suggestions/overall" className={tabClassName}>
-        {t('nav.trending')}
-      </NavLink>
     </nav>
   );
 };

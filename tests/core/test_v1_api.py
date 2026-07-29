@@ -53,7 +53,8 @@ def client(tmp_path: Path):
             INSERT INTO books VALUES (10, 'Allowed', 'Author', 'en', 2020, NULL, NULL, 1),
                 (11, 'Private', 'Other', 'en', 2021, NULL, NULL, 1),
                 (12, 'Entitled only', 'Other', 'en', 2022, NULL, NULL, 1),
-                (13, 'Requested only', 'Other', 'en', 2023, NULL, NULL, 1);
+                (13, 'Requested only', 'Other', 'en', 2023, NULL, NULL, 1),
+                (14, 'Trending only', 'Other', 'en', 2024, NULL, NULL, 0);
             INSERT INTO book_files VALUES (100, 10, 'epub', 42, 'application/epub+zip', '2026-01-01', 'imported', 'ebook');
             INSERT INTO book_files VALUES (101, 11, 'epub', 43, 'application/epub+zip', '2026-01-01', 'imported', 'ebook');
             INSERT INTO book_files VALUES (102, 12, 'epub', 44, 'application/epub+zip', '2026-01-01', 'imported', 'ebook');
@@ -101,6 +102,20 @@ def test_library_contract_and_idor_protection(client) -> None:
     membership = {item["id"]: item["in_library"] for item in catalog.json["items"]}
     assert membership[10] is True
     assert membership[11] is False
+
+
+def test_trending_only_book_detail_does_not_promote_catalog_visibility(client) -> None:
+    before = client.get("/api/v1/catalog/books")
+    assert before.status_code == 200
+    assert 14 not in {item["id"] for item in before.json["items"]}
+
+    detail = client.get("/api/v1/catalog/books/14")
+    assert detail.status_code == 200
+    assert detail.json["book"]["id"] == 14
+
+    after = client.get("/api/v1/catalog/books")
+    assert after.status_code == 200
+    assert 14 not in {item["id"] for item in after.json["items"]}
 
 
 def test_bulk_add_library_books_is_idempotent_and_reports_partial_results(client) -> None:

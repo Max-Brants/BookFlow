@@ -58,6 +58,13 @@ def _row_to_book(row: sqlite3.Row | None) -> dict[str, Any] | None:
     return payload
 
 
+def _require_kobo_settings(row: sqlite3.Row | None) -> sqlite3.Row:
+    if row is None:
+        msg = "Active Kobo shelf state has no user settings"
+        raise RuntimeError(msg)
+    return row
+
+
 class LibraryService:
     """Service for library membership and book/file lookups."""
 
@@ -340,7 +347,7 @@ class LibraryService:
                 conn.close()
 
     def remove_from_library(self, *, user_id: int, book_id: int) -> bool:
-        """Hard-delete the user's library row for a book. Returns True when deleted."""
+        """Remove membership and any active Kobo shelf intent in one transaction."""
         normalized_user_id = normalize_positive_int(user_id)
         normalized_book_id = self._book_identity(book_id)
         if normalized_user_id is None:
@@ -349,8 +356,78 @@ class LibraryService:
         with self._lock:
             conn = self._connect()
             try:
+                conn.execute("BEGIN IMMEDIATE")
                 book_ids = equivalent_book_ids(conn, normalized_book_id)
                 placeholders = ",".join("?" for _ in book_ids)
+                active_kobo_books = conn.execute(
+                    f"""
+                    SELECT book_id FROM user_kobo_books
+                    WHERE user_id = ? AND book_id IN ({placeholders})
+                      AND desired_state = 'active'
+                    ORDER BY revision, book_id
+                    """,  # noqa: S608 - only the placeholder count is generated.
+                    (normalized_user_id, *book_ids),
+                ).fetchall()
+                if active_kobo_books:
+                    settings = conn.execute(
+                        """
+                        SELECT current_revision FROM user_kobo_settings
+                        WHERE user_id = ?
+                        """,
+                        (normalized_user_id,),
+                    ).fetchone()
+                    settings = _require_kobo_settings(settings)
+                    revision = int(settings["current_revision"])
+                    changed_at = _now_utc_iso()
+                    payload_json = json.dumps(
+                        {
+                            "desired_state": "deleted",
+                            "preferred_format": None,
+                            "source": "library_removal",
+                        },
+                        sort_keys=True,
+                    )
+                    for kobo_book in active_kobo_books:
+                        kobo_book_id = int(kobo_book["book_id"])
+                        revision += 1
+                        conn.execute(
+                            """
+                            UPDATE user_kobo_books
+                            SET file_id = NULL, desired_state = 'deleted',
+                                preferred_format = NULL, source = 'library_removal',
+                                request_id = NULL, revision = ?, updated_at = ?
+                            WHERE user_id = ? AND book_id = ?
+                            """,
+                            (
+                                revision,
+                                changed_at,
+                                normalized_user_id,
+                                kobo_book_id,
+                            ),
+                        )
+                        conn.execute(
+                            """
+                            INSERT INTO user_kobo_changes (
+                                user_id, revision, change_type, book_id, file_id,
+                                payload_json, created_at
+                            ) VALUES (?, ?, 'delete', ?, NULL, ?, ?)
+                            """,
+                            (
+                                normalized_user_id,
+                                revision,
+                                kobo_book_id,
+                                payload_json,
+                                changed_at,
+                            ),
+                        )
+                    conn.execute(
+                        """
+                        UPDATE user_kobo_settings
+                        SET current_revision = ?, updated_at = ?
+                        WHERE user_id = ?
+                        """,
+                        (revision, changed_at, normalized_user_id),
+                    )
                 cursor = conn.execute(
                     f"""
                     DELETE FROM user_library
@@ -359,6 +436,10 @@ class LibraryService:
                     (normalized_user_id, *book_ids),
                 )
                 conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            else:
                 return cursor.rowcount > 0
             finally:
                 conn.close()

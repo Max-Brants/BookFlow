@@ -3,26 +3,19 @@ import { Link, useParams } from 'react-router-dom';
 
 import { BookSelectionControl } from '../components/BookSelectionControl';
 import { BulkLibraryActionBar } from '../components/BulkLibraryActionBar';
-import { DiscoverNavigation } from '../components/DiscoverNavigation';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useBulkLibrarySelection } from '../hooks/useBulkLibrarySelection';
 import { useDependencyEffect } from '../hooks/useMountEffect';
-import type { TranslationKey } from '../i18n/translations';
 import { v1Api } from '../services/v1Api';
 import type { V1SuggestionBook } from '../types/v1';
 import { withBasePath } from '../utils/basePath';
-import { catalogBookPath } from '../utils/catalogBookPath';
+import {
+  SUGGESTION_LIST_LABELS,
+  contextualBookPath,
+  isSuggestionListKey,
+} from './bookDetailContext';
 
 const PAGE_SIZE = 30;
-
-const LIST_LABELS: Record<string, TranslationKey> = {
-  overall: 'suggestions.list.overall',
-  fiction: 'suggestions.list.fiction',
-  non_fiction: 'suggestions.list.non_fiction',
-  thriller: 'suggestions.list.thriller',
-  youth: 'suggestions.list.youth',
-  cooking: 'suggestions.list.cooking',
-};
 
 const Cover = ({ book, alt }: { book: V1SuggestionBook; alt: string }) =>
   book.cover_url ? (
@@ -79,7 +72,10 @@ export const SuggestionsPage = () => {
   }, [load]);
 
   const hasMore = books.length < total;
-  const label = t(LIST_LABELS[listKey] ?? 'suggestions.title');
+  const suggestionListKey = isSuggestionListKey(listKey) ? listKey : null;
+  const label = t(
+    suggestionListKey ? SUGGESTION_LIST_LABELS[suggestionListKey] : 'suggestions.title',
+  );
   return (
     <section className="pb-16">
       <div className="mb-7">
@@ -88,7 +84,6 @@ export const SuggestionsPage = () => {
         </p>
         <h1 className="mt-1 text-3xl font-semibold tracking-tight">{label}</h1>
       </div>
-      <DiscoverNavigation />
       <div className="mb-4 flex justify-end">
         <button
           type="button"
@@ -104,7 +99,7 @@ export const SuggestionsPage = () => {
         className="scrollbar-hide mb-8 flex gap-2 overflow-x-auto pb-2"
         aria-label={t('suggestions.title')}
       >
-        {Object.entries(LIST_LABELS).map(([key, translationKey]) => (
+        {Object.entries(SUGGESTION_LIST_LABELS).map(([key, translationKey]) => (
           <Link
             key={key}
             to={`/suggestions/${key}`}
@@ -138,7 +133,7 @@ export const SuggestionsPage = () => {
             {books.map((book) => (
               <article key={book.id} className="relative min-w-0">
                 <Link
-                  to={catalogBookPath(book)}
+                  to={contextualBookPath('trending', book.id, suggestionListKey ?? 'overall')}
                   tabIndex={bulk.active ? -1 : undefined}
                   className="block"
                 >

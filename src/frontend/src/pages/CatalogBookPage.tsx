@@ -1,5 +1,5 @@
 import { useCallback, useState, type ReactNode } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, Navigate, useNavigate, useParams } from 'react-router-dom';
 
 import { useLanguage } from '../contexts/LanguageContext';
 import { useDependencyEffect } from '../hooks/useMountEffect';
@@ -12,6 +12,11 @@ import type { V1BookDetail, V1CatalogBookDetail, V1ReleaseProfile, V1Request } f
 import { withBasePath } from '../utils/basePath';
 import { createIdempotencyKey } from '../utils/idempotencyKey';
 import {
+  bookDetailBackLink,
+  isSuggestionListKey,
+  type BookDetailContext,
+} from './bookDetailContext';
+import {
   blocksNewRequest,
   catalogPrimaryAction,
   presentBookDetail,
@@ -22,6 +27,8 @@ import {
 interface CatalogBookPageProps {
   canAddToLibrary: boolean;
   isAdmin: boolean;
+  context: BookDetailContext;
+  koboEnabled: boolean;
 }
 
 const REQUEST_LABELS: Record<V1Request['status'], TranslationKey> = {
@@ -71,10 +78,17 @@ const formatRequestError = (caught: unknown, fallback: string): string => {
   return caught instanceof Error ? caught.message : fallback;
 };
 
-export const CatalogBookPage = ({ canAddToLibrary, isAdmin }: CatalogBookPageProps) => {
+export const CatalogBookPage = ({
+  canAddToLibrary,
+  context,
+  isAdmin,
+  koboEnabled,
+}: CatalogBookPageProps) => {
   const { language, t } = useLanguage();
-  const { bookId: rawBookId, isbn: rawIsbn } = useParams();
   const navigate = useNavigate();
+  const { bookId: rawBookId, isbn: rawIsbn, listKey: rawListKey } = useParams();
+  const trendingListKey = isSuggestionListKey(rawListKey) ? rawListKey : null;
+  const invalidTrendingContext = context === 'trending' && trendingListKey === null;
   const [detail, setDetail] = useState<V1CatalogBookDetail | null>(null);
   const [libraryBook, setLibraryBook] = useState<V1BookDetail | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -103,8 +117,10 @@ export const CatalogBookPage = ({ canAddToLibrary, isAdmin }: CatalogBookPagePro
   const [reportField, setReportField] = useState('title');
   const [reportNote, setReportNote] = useState('');
   const [fileAction, setFileAction] = useState<string | null>(null);
+  const [updatingKobo, setUpdatingKobo] = useState(false);
 
   const load = useCallback(async () => {
+    if (invalidTrendingContext) return;
     setDetail(null);
     setLibraryBook(null);
     setMessage(null);
@@ -119,17 +135,21 @@ export const CatalogBookPage = ({ canAddToLibrary, isAdmin }: CatalogBookPagePro
           ? await v1Api.catalogBookByIsbn(reference.value)
           : await v1Api.catalogBook(reference.value);
       setDetail(nextDetail);
-      if (nextDetail.entitled) {
+      if (nextDetail.in_library || nextDetail.entitled) {
         setLibraryBook(await v1Api.book(nextDetail.book.id).catch(() => null));
       }
     } catch (caught) {
       setMessage(caught instanceof Error ? caught.message : t('common.loadFailed'));
     }
-  }, [rawBookId, rawIsbn, t]);
+  }, [invalidTrendingContext, rawBookId, rawIsbn, t]);
 
   useDependencyEffect(() => {
     void load();
   }, [load]);
+
+  if (invalidTrendingContext) {
+    return <Navigate to="/suggestions/overall" replace />;
+  }
 
   if (!detail) {
     return <p className="py-10 text-sm opacity-65">{message ?? t('common.loading')}</p>;
@@ -188,12 +208,16 @@ export const CatalogBookPage = ({ canAddToLibrary, isAdmin }: CatalogBookPagePro
   const requestTone = requestStatusKind(detail.request?.status);
   const libraryDate = formatDate(personal.library_added_at, language);
   const requestDate = formatDate(detail.request?.updated_at, language);
+  const backLink = bookDetailBackLink(context, trendingListKey ?? 'overall');
   let koboLabel = t('catalogDetail.koboNotSynced');
   if (personal.kobo_state === 'active') koboLabel = t('catalogDetail.koboActive');
   if (personal.kobo_state === 'deleted') koboLabel = t('catalogDetail.koboDeleted');
 
   const primaryAction = catalogPrimaryAction(detail, canAddToLibrary);
   const readableFile = libraryBook?.files.find((file) => canReadInBrowser(file.file_format));
+  const koboFile = libraryBook?.files[0];
+  const koboActive =
+    libraryBook?.kobo?.desired_state === 'active' || personal.kobo_state === 'active';
   const readerPath = readableFile ? `/library/${book.id}/read/${readableFile.id}` : '/library';
   let openLabel = t('catalogDetail.openPersonal');
   if (readableFile) openLabel = t('catalogDetail.readNow');
@@ -222,7 +246,7 @@ export const CatalogBookPage = ({ canAddToLibrary, isAdmin }: CatalogBookPagePro
         {detail.in_library &&
           (confirmRemoval ? (
             <span className="flex items-center gap-2 rounded-lg border border-amber-200/35 px-3 py-1.5 text-sm text-amber-100">
-              {t('catalogDetail.removeLibraryOnly')}
+              {t('catalogDetail.removeLibraryConfirm')}
               <button
                 type="button"
                 disabled={removing}
@@ -231,8 +255,7 @@ export const CatalogBookPage = ({ canAddToLibrary, isAdmin }: CatalogBookPagePro
                   setRemoving(true);
                   void removeLibraryBook(book.id)
                     .then(() => {
-                      setMessage(t('catalogDetail.removedFromLibrary'));
-                      return load();
+                      void navigate('/library');
                     })
                     .catch((caught: unknown) =>
                       setMessage(caught instanceof Error ? caught.message : t('common.loadFailed')),
@@ -261,6 +284,7 @@ export const CatalogBookPage = ({ canAddToLibrary, isAdmin }: CatalogBookPagePro
             </button>
           ))}
         {isAdmin &&
+          context === 'catalog' &&
           (confirmCatalogDeletion ? (
             <span className="flex items-center gap-2 rounded-lg border border-red-300/45 bg-red-950/30 px-3 py-1.5 text-sm text-red-100">
               <span>
@@ -437,13 +461,57 @@ export const CatalogBookPage = ({ canAddToLibrary, isAdmin }: CatalogBookPagePro
     );
   }
 
+  let koboActionLabel = t('bookDetail.addToKobo');
+  if (updatingKobo) koboActionLabel = t('common.loading');
+  else if (koboActive) koboActionLabel = t('bookDetail.removeFromKobo');
+
+  const koboAction =
+    koboEnabled && detail.in_library ? (
+      <>
+        <button
+          type="button"
+          disabled={updatingKobo || (!koboActive && !koboFile)}
+          className="rounded-lg border border-white/25 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
+          onClick={() => {
+            if (!koboActive && !koboFile) return;
+            setUpdatingKobo(true);
+            setMessage(null);
+            const mutation =
+              koboActive || !koboFile
+                ? v1Api.removeKoboBook(book.id)
+                : v1Api.addKoboBook(book.id, koboFile.id, koboFile.file_format.toLowerCase());
+            void mutation
+              .then(async () => {
+                if (koboActive && context === 'kobo') {
+                  void navigate('/kobo');
+                  return;
+                }
+                await load();
+                setMessage(
+                  koboActive ? t('bookDetail.removedFromKobo') : t('bookDetail.addedToKobo'),
+                );
+              })
+              .catch((caught: unknown) =>
+                setMessage(caught instanceof Error ? caught.message : t('common.loadFailed')),
+              )
+              .finally(() => setUpdatingKobo(false));
+          }}
+        >
+          {koboActionLabel}
+        </button>
+        {!koboActive && !koboFile && (
+          <span className="text-sm text-slate-300">{t('catalogDetail.addKoboNoFile')}</span>
+        )}
+      </>
+    ) : null;
+
   return (
     <section className="mx-auto w-full max-w-6xl pb-16">
       <Link
-        to="/catalog"
+        to={backLink.path}
         className="inline-flex items-center gap-2 text-sm text-violet-700 transition hover:text-violet-600 dark:text-violet-300 dark:hover:text-violet-200"
       >
-        ← {t('catalogDetail.back')}
+        ← {t(backLink.labelKey)}
       </Link>
       <section className="relative mt-5 overflow-hidden rounded-3xl border border-slate-700/60 bg-slate-950 text-white shadow-2xl">
         {book.cover_url && (
@@ -523,6 +591,7 @@ export const CatalogBookPage = ({ canAddToLibrary, isAdmin }: CatalogBookPagePro
 
             <div className="mt-6 flex flex-wrap items-center gap-3">
               {action}
+              {koboAction}
               {message && <p className="text-sm text-slate-300">{message}</p>}
             </div>
           </div>

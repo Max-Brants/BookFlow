@@ -6,7 +6,6 @@ import { useDependencyEffect } from '../hooks/useMountEffect';
 import { v1Api } from '../services/v1Api';
 import type { V1Book } from '../types/v1';
 import { withBasePath } from '../utils/basePath';
-import { catalogBookPath } from '../utils/catalogBookPath';
 
 type FileFilter = 'all' | 'with-files' | 'needs-files';
 type LibrarySort = 'recent' | 'title' | 'author' | 'year';
@@ -276,7 +275,10 @@ export const LibraryPage = ({
         >
           {books.map((book) => (
             <article key={book.id} className={view === 'grid' ? 'group min-w-0' : 'flex gap-4 p-4'}>
-              <Link to={catalogBookPath(book)} className={view === 'grid' ? 'block' : 'contents'}>
+              <Link
+                to={koboOnly ? `/kobo/${book.id}` : `/library/${book.id}`}
+                className={view === 'grid' ? 'block' : 'contents'}
+              >
                 <div className={view === 'grid' ? '' : 'w-16 shrink-0'}>
                   <Cover book={book} />
                 </div>

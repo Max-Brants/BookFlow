@@ -176,7 +176,7 @@ export const DashboardPage = () => {
         {(trending?.items ?? []).map((book, index) => (
           <PosterCard
             key={book.id}
-            to={catalogBookPath(book)}
+            to={`/suggestions/overall/${book.id}`}
             title={book.title}
             author={book.author}
             coverUrl={book.cover_url}
