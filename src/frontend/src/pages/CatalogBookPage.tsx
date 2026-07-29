@@ -1,10 +1,10 @@
-import { useCallback, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
 import { useLanguage } from '../contexts/LanguageContext';
 import { useDependencyEffect } from '../hooks/useMountEffect';
 import type { TranslationKey } from '../i18n/translations';
-import { downloadBookFile, fetchBookFile, shareBookFile } from '../reader/fileActions';
+import { downloadBookFile, fetchBookFile } from '../reader/fileActions';
 import { canReadInBrowser } from '../reader/formatCapabilities';
 import { addLibraryBook, removeLibraryBook } from '../services/api';
 import { v1Api, type V1CatalogDeletionPlan } from '../services/v1Api';
@@ -103,12 +103,6 @@ export const CatalogBookPage = ({ canAddToLibrary, isAdmin }: CatalogBookPagePro
   const [reportField, setReportField] = useState('title');
   const [reportNote, setReportNote] = useState('');
   const [fileAction, setFileAction] = useState<string | null>(null);
-  const [preparedFileStates, setPreparedFileStates] = useState<
-    Record<number, 'preparing' | 'ready' | 'failed'>
-  >({});
-  const preparedFiles = useRef(new Map<number, File>());
-  const preparingFiles = useRef(new Set<number>());
-  const preparedFileGeneration = useRef(0);
 
   const load = useCallback(async () => {
     setDetail(null);
@@ -136,16 +130,6 @@ export const CatalogBookPage = ({ canAddToLibrary, isAdmin }: CatalogBookPagePro
   useDependencyEffect(() => {
     void load();
   }, [load]);
-
-  // Detail routes may be reused by the router. Prepared Files can be large,
-  // so never retain them after navigating away from the book that requested
-  // them.
-  useDependencyEffect(() => {
-    preparedFileGeneration.current += 1;
-    preparedFiles.current.clear();
-    preparingFiles.current.clear();
-    setPreparedFileStates({});
-  }, [detail?.book.id]);
 
   if (!detail) {
     return <p className="py-10 text-sm opacity-65">{message ?? t('common.loading')}</p>;
@@ -214,59 +198,8 @@ export const CatalogBookPage = ({ canAddToLibrary, isAdmin }: CatalogBookPagePro
   let openLabel = t('catalogDetail.openPersonal');
   if (readableFile) openLabel = t('catalogDetail.readNow');
   if (progress !== null) openLabel = t('catalogDetail.continueReading');
-  const prepareFileForShare = (file: NonNullable<typeof libraryBook>['files'][number]): void => {
-    if (preparedFiles.current.has(file.id) || preparingFiles.current.has(file.id)) return;
-    const generation = preparedFileGeneration.current;
-    // A detail page can expose many formats. Keep exactly one large prepared
-    // File; hovering a list must not turn into an unbounded in-memory cache.
-    preparedFiles.current.clear();
-    preparingFiles.current.clear();
-    preparingFiles.current.add(file.id);
-    setPreparedFileStates({ [file.id]: 'preparing' });
-    void fetchBookFile(v1Api.libraryFileDownloadUrl(book.id, file.id), book.title, file.file_format)
-      .then(
-        (preparedFile) => {
-          if (generation !== preparedFileGeneration.current) return;
-          preparedFiles.current.clear();
-          preparedFiles.current.set(file.id, preparedFile);
-          setPreparedFileStates({ [file.id]: 'ready' });
-        },
-        () => {
-          if (generation !== preparedFileGeneration.current) return;
-          setPreparedFileStates({ [file.id]: 'failed' });
-        },
-      )
-      .finally(() => {
-        if (generation === preparedFileGeneration.current) preparingFiles.current.delete(file.id);
-      });
-  };
-  const runFileAction = (
-    action: 'download' | 'share',
-    file: NonNullable<typeof libraryBook>['files'][number],
-  ) => {
-    if (action === 'share') {
-      const preparedFile = preparedFiles.current.get(file.id);
-      if (!preparedFile) {
-        prepareFileForShare(file);
-        setMessage(
-          preparedFileStates[file.id] === 'failed'
-            ? t('catalogDetail.sharePreparationFailed')
-            : t('catalogDetail.sharePreparationPending'),
-        );
-        return;
-      }
-      setFileAction(`share-${file.id}`);
-      setMessage(null);
-      void shareBookFile(preparedFile, book.title)
-        .catch((caught: unknown) => {
-          if (caught instanceof DOMException && caught.name === 'AbortError') return;
-          setMessage(caught instanceof Error ? caught.message : t('common.loadFailed'));
-        })
-        .finally(() => setFileAction(null));
-      return;
-    }
-    const actionKey = `${action}-${file.id}`;
-    setFileAction(actionKey);
+  const downloadFile = (file: NonNullable<typeof libraryBook>['files'][number]) => {
+    setFileAction(`download-${file.id}`);
     setMessage(null);
     void fetchBookFile(v1Api.libraryFileDownloadUrl(book.id, file.id), book.title, file.file_format)
       .then((bookFile) => downloadBookFile(bookFile))
@@ -808,13 +741,6 @@ export const CatalogBookPage = ({ canAddToLibrary, isAdmin }: CatalogBookPagePro
             <div className="mt-5 space-y-2" aria-label={t('catalogDetail.availableFiles')}>
               {libraryBook.files.map((file) => {
                 const readable = canReadInBrowser(file.file_format);
-                let shareLabel = t('catalogDetail.openOtherApp');
-                if (fileAction === `share-${file.id}`) {
-                  shareLabel = t('catalogDetail.openingOtherApp');
-                }
-                if (preparedFileStates[file.id] === 'preparing') {
-                  shareLabel = t('catalogDetail.preparingFile');
-                }
                 return (
                   <div
                     key={file.id}
@@ -839,21 +765,11 @@ export const CatalogBookPage = ({ canAddToLibrary, isAdmin }: CatalogBookPagePro
                         type="button"
                         disabled={fileAction !== null}
                         className="rounded-md border border-(--border-muted) px-2.5 py-1.5 text-xs font-semibold disabled:opacity-50"
-                        onClick={() => runFileAction('download', file)}
+                        onClick={() => downloadFile(file)}
                       >
                         {fileAction === `download-${file.id}`
                           ? t('catalogDetail.downloading')
                           : t('bookDetail.download')}
-                      </button>
-                      <button
-                        type="button"
-                        disabled={fileAction !== null}
-                        className="rounded-md border border-(--border-muted) px-2.5 py-1.5 text-xs font-semibold disabled:opacity-50"
-                        onPointerEnter={() => prepareFileForShare(file)}
-                        onFocus={() => prepareFileForShare(file)}
-                        onClick={() => runFileAction('share', file)}
-                      >
-                        {shareLabel}
                       </button>
                     </div>
                   </div>

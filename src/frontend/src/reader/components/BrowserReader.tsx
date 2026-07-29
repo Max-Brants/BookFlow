@@ -23,7 +23,6 @@ interface BrowserReaderProps {
   onBack: () => void;
   onProgressChange: (locator: ReaderLocator) => void;
   onDownload: () => Promise<void>;
-  onShare: () => Promise<void>;
 }
 
 const targetIsInteractive = (target: EventTarget | null): boolean => {
@@ -44,7 +43,6 @@ export const BrowserReader = ({
   onBack,
   onProgressChange,
   onDownload,
-  onShare,
 }: BrowserReaderProps) => {
   const viewportRef = useRef<HTMLDivElement>(null);
   const adapterRef = useRef<ReaderAdapter | null>(null);
@@ -194,7 +192,6 @@ export const BrowserReader = ({
         }}
         onToggleFullscreen={toggleFullscreen}
         onDownload={onDownload}
-        onShare={onShare}
       />
       {tocOpen && (
         <ReaderTocPanel

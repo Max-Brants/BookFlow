@@ -35,19 +35,3 @@ export const downloadBookFile = (file: File): void => {
   link.click();
   window.setTimeout(() => URL.revokeObjectURL(url), 0);
 };
-
-/**
- * Starts Web Share immediately. Call this only with a File that was prepared
- * before the user tapped: awaiting even an already-resolved file promise can
- * make Android Chrome discard the transient user activation.
- */
-export const shareBookFile = (file: File, title: string): Promise<void> => {
-  if (typeof navigator.share !== 'function') {
-    throw new Error('Openen in een andere app wordt niet ondersteund door deze browser.');
-  }
-  const shareData: ShareData = { files: [file], title };
-  if (typeof navigator.canShare === 'function' && !navigator.canShare(shareData)) {
-    throw new Error('Deze browser kan dit boekformaat niet met een andere app delen.');
-  }
-  return navigator.share(shareData);
-};
