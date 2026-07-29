@@ -5,6 +5,7 @@ import { DashboardShelf, PosterCard, RequestCard } from '../components/dashboard
 import { useLanguage } from '../contexts/LanguageContext';
 import { useBulkLibrarySelection } from '../hooks/useBulkLibrarySelection';
 import { useDependencyEffect } from '../hooks/useMountEffect';
+import { useOfflineReading } from '../library/offline/OfflineReadingCoordinator';
 import { v1Api } from '../services/v1Api';
 import type {
   V1CatalogBook,
@@ -32,6 +33,7 @@ export const DashboardPage = () => {
   const [errors, setErrors] = useState<Partial<Record<DashboardSectionKey, string>>>({});
   const [loading, setLoading] = useState(true);
   const trendingBulk = useBulkLibrarySelection('dashboard-trending');
+  const { cachedFileIds, status: offlineCacheStatus, failedBookCount } = useOfflineReading();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -54,6 +56,13 @@ export const DashboardPage = () => {
 
   return (
     <section className="space-y-8 pt-1 pb-16 sm:space-y-10">
+      {offlineCacheStatus === 'error' && (
+        <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+          {failedBookCount > 0
+            ? t('offline.onlineCacheFailure', { count: failedBookCount })
+            : t('offline.cacheFailure')}
+        </div>
+      )}
       <DashboardShelf
         id="recent-heading"
         title={t('dashboard.recent')}
@@ -107,18 +116,26 @@ export const DashboardPage = () => {
           emptyMessage={t('dashboard.continueEmpty')}
           onRetry={() => void load()}
         >
-          {reading.slice(0, 10).map((item) => (
-            <PosterCard
-              key={item.book_id}
-              to={`/library/${item.book_id}`}
-              title={item.title ?? t('dashboard.bookFallback')}
-              author={item.author}
-              coverUrl={item.cover_url}
-              badge={`${Math.round(item.progress)}%`}
-              badgeTone="green"
-              progress={item.progress}
-            />
-          ))}
+          {reading.slice(0, 10).map((item) => {
+            const offlineAvailable =
+              typeof item.file_id === 'number' && cachedFileIds.has(item.file_id);
+            return (
+              <PosterCard
+                key={item.book_id}
+                to={`/library/${item.book_id}`}
+                title={item.title ?? t('dashboard.bookFallback')}
+                author={item.author}
+                coverUrl={item.cover_url}
+                badge={
+                  offlineAvailable
+                    ? t('offline.availableBadge', { progress: Math.round(item.progress) })
+                    : `${Math.round(item.progress)}%`
+                }
+                badgeTone="green"
+                progress={item.progress}
+              />
+            );
+          })}
         </DashboardShelf>
       )}
 

@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 
+import { useNetworkStatus } from '../contexts/NetworkStatusContext';
 import { useDependencyEffect } from '../hooks/useMountEffect';
 import {
   offlineReadingLibrary,
@@ -41,6 +42,7 @@ interface ReaderOpenState {
 export const ReaderPage = ({ accountId }: ReaderPageProps) => {
   const { bookId: rawBookId, fileId: rawFileId } = useParams();
   const navigate = useNavigate();
+  const { isOnline } = useNetworkStatus();
   const [openState, setOpenState] = useState<ReaderOpenState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const pendingProgress = useRef<ReaderProgress | null>(null);
@@ -62,12 +64,13 @@ export const ReaderPage = ({ accountId }: ReaderPageProps) => {
         completed: progress.completed,
         lastReadAt: progress.updatedAt,
       });
+      if (!isOnline) return;
       const result = await syncOfflineProgress(offlineReadingStore, accountId, sendPendingProgress);
       if (result.failed > 0) pendingProgress.current = progress;
     } catch {
       pendingProgress.current = progress;
     }
-  }, [accountId, bookId, fileId]);
+  }, [accountId, bookId, fileId, isOnline]);
 
   useDependencyEffect(() => {
     if (!bookId || !fileId) {
@@ -100,59 +103,68 @@ export const ReaderPage = ({ accountId }: ReaderPageProps) => {
       return true;
     };
 
-    void Promise.all([v1Api.book(bookId), getReaderProgress(bookId, fileId)]).then(
-      async ([detail, serverProgress]) => {
-        if (cancelled) return;
-        const selected = detail.files.find((entry) => entry.id === fileId);
-        if (!selected) {
-          setError('This file is no longer available in your library.');
-          return;
-        }
-        if (!canReadInBrowser(selected.file_format)) {
-          setError(`${selected.file_format.toUpperCase()} is not supported by the browser reader.`);
-          return;
-        }
-        const readerFile = readerFileFromV1({
-          bookId,
-          fileId,
-          title: detail.book.title,
-          author: detail.book.author,
-          format: selected.file_format,
-        });
-        setOpenState({
-          file: readerFile,
-          initialLocator: readerLocatorForOpen(loadReaderLocator(bookId, fileId), serverProgress),
-        });
-        const cached = await offlineReadingLibrary.getBook(accountId, fileId);
-        const progress = serverProgress
-          ? {
-              locator: serverProgress.value,
-              progression: serverProgress.progression,
-              completed: serverProgress.completed,
-              lastReadAt: serverProgress.updatedAt ?? new Date().toISOString(),
-            }
-          : undefined;
-        const metadata = {
-          accountId,
-          bookId,
-          fileId,
-          title: detail.book.title,
-          author: detail.book.author,
-          format: selected.file_format,
-          coverUrl: detail.book.cover_url,
-          contentUrl: readerFile.contentUrl,
-          progress,
-        };
-        void (
-          cached
-            ? offlineReadingLibrary.refreshBook(accountId, fileId)
-            : offlineReadingLibrary.downloadAndCache(metadata, new Set([fileId]))
-        ).catch(() => undefined);
-      },
-      async () => {
-        if (!cancelled && !(await openCached())) setError('The book could not be loaded offline.');
-      },
-    );
+    if (!isOnline) {
+      void openCached().then((opened) => {
+        if (!cancelled && !opened) setError('The book could not be loaded offline.');
+      });
+    } else {
+      void Promise.all([v1Api.book(bookId), getReaderProgress(bookId, fileId)]).then(
+        async ([detail, serverProgress]) => {
+          if (cancelled) return;
+          const selected = detail.files.find((entry) => entry.id === fileId);
+          if (!selected) {
+            setError('This file is no longer available in your library.');
+            return;
+          }
+          if (!canReadInBrowser(selected.file_format)) {
+            setError(
+              `${selected.file_format.toUpperCase()} is not supported by the browser reader.`,
+            );
+            return;
+          }
+          const readerFile = readerFileFromV1({
+            bookId,
+            fileId,
+            title: detail.book.title,
+            author: detail.book.author,
+            format: selected.file_format,
+          });
+          setOpenState({
+            file: readerFile,
+            initialLocator: readerLocatorForOpen(loadReaderLocator(bookId, fileId), serverProgress),
+          });
+          const cached = await offlineReadingLibrary.getBook(accountId, fileId);
+          const progress = serverProgress
+            ? {
+                locator: serverProgress.value,
+                progression: serverProgress.progression,
+                completed: serverProgress.completed,
+                lastReadAt: serverProgress.updatedAt ?? new Date().toISOString(),
+              }
+            : undefined;
+          const metadata = {
+            accountId,
+            bookId,
+            fileId,
+            title: detail.book.title,
+            author: detail.book.author,
+            format: selected.file_format,
+            coverUrl: detail.book.cover_url,
+            contentUrl: readerFile.contentUrl,
+            progress,
+          };
+          void (
+            cached
+              ? offlineReadingLibrary.refreshBook(accountId, fileId)
+              : offlineReadingLibrary.downloadAndCache(metadata, new Set([fileId]))
+          ).catch(() => undefined);
+        },
+        async () => {
+          if (!cancelled && !(await openCached()))
+            setError('The book could not be loaded offline.');
+        },
+      );
+    }
     return () => {
       cancelled = true;
       releaseOfflineProtection();
@@ -206,7 +218,7 @@ export const ReaderPage = ({ accountId }: ReaderPageProps) => {
           type="button"
           className="mt-3 rounded bg-sky-700 px-3 py-2 text-sm text-white"
           onClick={() => {
-            void navigate('/library');
+            void navigate(isOnline ? '/library' : '/');
           }}
         >
           Back to library
@@ -223,7 +235,7 @@ export const ReaderPage = ({ accountId }: ReaderPageProps) => {
       initialLocator={openState?.initialLocator}
       adapterFactory={readerAdapterFactory}
       onBack={() => {
-        void navigate(`/library/${file.bookId}`);
+        void navigate(isOnline ? `/library/${file.bookId}` : '/');
       }}
       onProgressChange={scheduleProgress}
       onDownload={async () => downloadBookFile(await loadActionFile())}
