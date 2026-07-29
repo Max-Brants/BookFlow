@@ -327,9 +327,7 @@ def test_remove_from_library_records_active_kobo_deletion(library_service, user_
     assert library_service.is_in_library(user_id=bob["id"], book_id=book["id"])
 
 
-def test_remove_from_library_rolls_back_kobo_deletion_on_failure(
-    library_service, user_db, db_path
-):
+def test_remove_from_library_rolls_back_kobo_deletion_on_failure(library_service, user_db, db_path):
     user = user_db.create_user(username="alice")
     book = _insert_book(library_service)
     library_service.add_to_library(user_id=user["id"], book_id=book["id"])
