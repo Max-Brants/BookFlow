@@ -73,6 +73,12 @@ class PdfAdapter implements ReaderAdapter {
 
   async goTo(locator: string): Promise<void> {
     if (!this.document) return;
+    const fraction = Number(locator.replace(/^fraction:/, ''));
+    if (locator.startsWith('fraction:') && Number.isFinite(fraction)) {
+      this.page = Math.round(fraction * (this.document.numPages - 1)) + 1;
+      await this.render();
+      return;
+    }
     const requested = Number(locator.replace(/^page:/, ''));
     if (!Number.isInteger(requested)) return;
     this.page = Math.max(1, Math.min(this.document.numPages, requested));

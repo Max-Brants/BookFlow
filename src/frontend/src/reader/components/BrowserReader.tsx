@@ -2,6 +2,7 @@ import { useCallback, useRef, useState, type PointerEvent as ReactPointerEvent }
 
 import { useDependencyEffect } from '../../hooks/useMountEffect';
 import type { ReaderAdapterFactory } from '../adapters/unavailableAdapter';
+import { initializeReaderAdapter } from '../readerInitialization';
 import { keyboardNavigationAction, tapZoneAction } from '../readerNavigation';
 import { loadReaderPreferences, saveReaderPreferences } from '../readerPreferences';
 import type {
@@ -95,17 +96,17 @@ export const BrowserReader = ({
           return;
         }
         adapterRef.current = adapter;
-        await adapter.open(container, file);
-        if (disposed) {
-          adapter.close();
-          return;
-        }
+        unsubscribe = await initializeReaderAdapter({
+          adapter,
+          container,
+          file,
+          initialLocator,
+          preferences: preferencesRef.current,
+          isDisposed: () => disposed,
+          onLocator: handleLocator,
+        });
+        if (disposed || !unsubscribe) return;
         setToc(adapter.getToc());
-        await adapter.setPreferences(preferencesRef.current);
-        if (initialLocator?.value) await adapter.goTo(initialLocator.value);
-        const current = adapter.getLocator();
-        if (current) handleLocator(current);
-        unsubscribe = adapter.subscribe(handleLocator);
         setLoading(false);
       })
       .catch((caught: unknown) => {

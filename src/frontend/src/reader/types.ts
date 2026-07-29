@@ -31,6 +31,8 @@ export interface ReaderLocator {
 export interface ReaderProgress extends ReaderLocator {
   completed: boolean;
   updatedAt?: string;
+  /** File to which a server-side locator belongs, when known. */
+  fileId?: number | null;
 }
 
 export interface ReaderPreferences {

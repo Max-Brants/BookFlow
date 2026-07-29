@@ -151,9 +151,12 @@ class FoliateAdapter implements ReaderAdapter {
     // Foliate's reference reader starts the first section without awaiting
     // the iframe load. Awaiting View.init() can hang the complete React reader
     // when Chromium delivers a ResizeObserver callback during iframe navigation.
-    void view.renderer?.next?.().catch((caught: unknown) => {
-      console.warn('Failed to render the first EPUB section', caught);
-    });
+    const firstRender = view.renderer?.next?.();
+    if (firstRender) {
+      await firstRender.catch((caught: unknown) => {
+        console.warn('Failed to render the first EPUB section', caught);
+      });
+    }
   }
 
   close(): void {
