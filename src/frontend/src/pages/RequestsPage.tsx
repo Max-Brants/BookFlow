@@ -29,6 +29,8 @@ export const RequestsPage = ({ isAdmin, onShowToast }: RequestsPageProps) => {
   const [interactiveSearch, setInteractiveSearch] = useState<{
     requestProcess: V1RequestProcess;
     title: string;
+    author?: string | null;
+    profile?: string | null;
   } | null>(null);
 
   const load = useCallback(async () => {
@@ -219,6 +221,8 @@ export const RequestsPage = ({ isAdmin, onShowToast }: RequestsPageProps) => {
                           setInteractiveSearch({
                             requestProcess,
                             title: title || `Book #${bookId}`,
+                            author: 'book_author' in first ? first.book_author : null,
+                            profile: first.profile_name,
                           })
                         }
                       >
@@ -271,6 +275,8 @@ export const RequestsPage = ({ isAdmin, onShowToast }: RequestsPageProps) => {
         <InteractiveSearchModal
           requestProcess={interactiveSearch.requestProcess}
           title={interactiveSearch.title}
+          author={interactiveSearch.author}
+          profile={interactiveSearch.profile}
           onClose={() => setInteractiveSearch(null)}
           onShowToast={onShowToast}
           onChanged={load}
