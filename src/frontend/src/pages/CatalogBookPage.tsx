@@ -1,6 +1,7 @@
 import { useCallback, useState, type ReactNode } from 'react';
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom';
 
+import { ManualEpubUpload } from '../components/ManualEpubUpload';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useDependencyEffect } from '../hooks/useMountEffect';
 import type { TranslationKey } from '../i18n/translations';
@@ -592,6 +593,16 @@ export const CatalogBookPage = ({
             <div className="mt-6 flex flex-wrap items-center gap-3">
               {action}
               {koboAction}
+              {isAdmin && (
+                <ManualEpubUpload
+                  bookId={book.id}
+                  onUploaded={async () => {
+                    setMessage(t('manualUpload.complete'));
+                    await load();
+                  }}
+                  onError={setMessage}
+                />
+              )}
               {message && <p className="text-sm text-slate-300">{message}</p>}
             </div>
           </div>

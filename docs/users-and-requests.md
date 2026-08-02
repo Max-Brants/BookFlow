@@ -21,6 +21,7 @@ Books without an imported file can only be requested; they cannot be placed dire
 - An admin's request is approved immediately. A user's request starts as **pending approval** until an admin approves the Book.
 - Approval is Book-wide: it approves all pending requests for the same Book and starts, or joins, one shared request process. The first approved request supplies the process's immutable profile snapshot.
 - Active requests stay on **Requests** until at least one file has been imported. Then all approved requesters receive the Book in **My Library**, their imported-file entitlements, and their saved Kobo Sync intent.
+- Administrators can upload a manually obtained EPUB from an active request or the Book detail page. A valid upload is added to the shared catalog and fulfils every active request for that Book.
 - Rejected, cancelled, and fulfilled requests remain in the history tab. A user can cancel their own pending request.
 - A Book with one or more imported files appears in **Catalog**. Users add it directly to **My Library**; this grants access to all currently imported files and does not create a request.
 

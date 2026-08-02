@@ -205,6 +205,27 @@ export const v1Api = {
     requestV1(`/catalog/books/${bookId}`),
   catalogBookByIsbn: (isbn: string): Promise<V1CatalogBookDetail> =>
     requestV1(`/catalog/books/isbn/${encodeURIComponent(isbn)}`),
+  uploadCatalogEpub: (
+    bookId: number,
+    file: File,
+  ): Promise<{
+    file: {
+      id: number;
+      book_id: number;
+      file_format: string;
+      size_bytes: number;
+      mime_type: string | null;
+    };
+    fulfilled_request_ids: number[];
+  }> => {
+    const data = new FormData();
+    data.set('file', file);
+    return requestV1(`/admin/catalog/books/${bookId}/files`, {
+      method: 'POST',
+      body: data,
+      signal: AbortSignal.timeout(120_000),
+    });
+  },
   catalogDeletionPlan: (
     bookId: number,
   ): Promise<{ plan: V1CatalogDeletionPlan; plan_token: string }> =>
