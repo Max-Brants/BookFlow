@@ -319,7 +319,17 @@ function App() {
                   <AdminDownloadsPage
                     status={currentStatus}
                     onCancel={(id) => void cancelDownload(id).then(fetchStatus)}
-                    onRetry={(id) => void retryDownload(id).then(fetchStatus)}
+                    onRetry={(id) =>
+                      void retryDownload(id)
+                        .then(fetchStatus)
+                        .catch((caught: unknown) =>
+                          showToast(
+                            caught instanceof Error ? caught.message : 'Retry failed',
+                            'error',
+                          ),
+                        )
+                    }
+                    onOpenRequest={(requestId) => void navigate(`/requests?requestId=${requestId}`)}
                     onRefresh={() => void fetchStatus()}
                   />
                 }

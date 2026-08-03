@@ -765,7 +765,11 @@ def cancel_download(book_id: str) -> bool:
     return result
 
 
-def retry_download(book_id: str) -> tuple[bool, str | None]:
+def retry_download(
+    book_id: str,
+    *,
+    allow_request_fresh_retry: bool = False,
+) -> tuple[bool, str | None]:
     """Retry a failed or cancelled download.
 
     Request-linked downloads can only be manually retried when cancelled or
@@ -779,7 +783,13 @@ def retry_download(book_id: str) -> tuple[bool, str | None]:
     if status not in (QueueStatus.ERROR, QueueStatus.CANCELLED):
         return False, "Download is not in an error or cancelled state"
 
-    if not can_retry_download_task(task, status):
+    privileged_request_retry = (
+        allow_request_fresh_retry
+        and task.request_id is not None
+        and status == QueueStatus.ERROR
+        and _has_fresh_retry_context(task)
+    )
+    if not can_retry_download_task(task, status) and not privileged_request_retry:
         return False, "Request-linked downloads must be retried from requests"
 
     task.last_error_message = None

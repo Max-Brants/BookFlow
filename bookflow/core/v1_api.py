@@ -21,6 +21,10 @@ from typing import TYPE_CHECKING, Any
 
 from flask import Blueprint, Flask, Response, g, jsonify, request, send_file
 
+from bookflow.core.attempt_service import (
+    CandidateRetryConflictError,
+    CandidateRetryNotFoundError,
+)
 from bookflow.core.bestseller_service import BestsellerSuggestionService
 from bookflow.core.book_groups import canonical_book_id, equivalent_book_ids
 from bookflow.core.book_matcher import normalize_isbn
@@ -73,6 +77,7 @@ def register_v1_api(
     resolve_file_path: Callable[[str], Path] | None = None,
     library_root: str | Path | None = None,
     kobo_fulfilment: Callable[[int, int, int], None] | None = None,
+    retry_candidate: Callable[[int], dict[str, int]] | None = None,
 ) -> None:
     """Register the standalone ``/api/v1`` Blueprint on an application.
 
@@ -2030,7 +2035,27 @@ def register_v1_api(
                                  blocked_releases.scope = 'global'
                                  OR blocked_releases.request_process_id = release_candidates.request_process_id
                              )
-                       ) AS blocked
+                       ) AS blocked,
+                       (
+                           release_candidates.selected_by IS NOT NULL
+                           AND release_candidates.selected_at IS NOT NULL
+                           AND EXISTS (
+                               SELECT 1 FROM request_attempts
+                               WHERE request_attempts.id = (
+                                   SELECT latest.id FROM request_attempts AS latest
+                                   WHERE latest.candidate_id = release_candidates.id
+                                   ORDER BY latest.id DESC LIMIT 1
+                               )
+                                 AND request_attempts.status = 'failed'
+                                 AND request_attempts.external_job_id IS NOT NULL
+                           )
+                           AND EXISTS (
+                               SELECT 1 FROM request_processes
+                               WHERE request_processes.id = release_candidates.request_process_id
+                                 AND request_processes.status = 'needs_attention'
+                                 AND request_processes.active_request_attempt_id IS NULL
+                           )
+                       ) AS retry_available
                 FROM release_candidates
                 WHERE request_process_id = ?
                   AND (? IS NULL OR search_run_id = ?)
@@ -2045,6 +2070,21 @@ def register_v1_api(
             return jsonify(result)
         except ValueError as exc:
             return error("invalid_pagination", str(exc), 400)
+
+    @blueprint.post("/admin/candidates/<int:candidate_id>/retry")
+    @require_actor(admin=True)
+    def retry_selected_candidate(candidate_id: int) -> tuple[Response, int] | Response:
+        if retry_candidate is None:
+            return error("candidate_retry_unavailable", "Candidate retry is unavailable", 503)
+        try:
+            result = retry_candidate(candidate_id)
+        except CandidateRetryNotFoundError as exc:
+            return error("candidate_not_found", str(exc), 404)
+        except CandidateRetryConflictError as exc:
+            return error("candidate_retry_conflict", str(exc), 409)
+        except (OSError, RuntimeError, sqlite3.Error) as exc:
+            return error("candidate_requeue_failed", str(exc), 409)
+        return jsonify({**result, "retried": True}), 202
 
     @blueprint.get("/admin/request-processes/<int:request_process_id>/search-runs")
     @require_actor(admin=True)

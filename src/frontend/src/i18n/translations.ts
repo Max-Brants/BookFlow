@@ -137,6 +137,8 @@ const en = {
   'interactiveSearch.blocked': 'Blocked',
   'interactiveSearch.rejected': 'Rejected by profile',
   'interactiveSearch.selected': 'Selected',
+  'interactiveSearch.retry': 'Retry',
+  'interactiveSearch.retrySuccess': 'Download retry scheduled',
   'interactiveSearch.forceConfirm':
     'This release was rejected by the active profile or blocklist. Force the grab anyway?',
   'interactiveSearch.auditReason': 'Required audit reason for this override',
@@ -1068,6 +1070,8 @@ const nl: Record<TranslationKey, string> = {
   'interactiveSearch.blocked': 'Geblokkeerd',
   'interactiveSearch.rejected': 'Afgewezen door profiel',
   'interactiveSearch.selected': 'Geselecteerd',
+  'interactiveSearch.retry': 'Opnieuw proberen',
+  'interactiveSearch.retrySuccess': 'Nieuwe downloadpoging ingepland',
   'interactiveSearch.forceConfirm':
     'Deze release is afgewezen door het actieve profiel of de blokkeerlijst. Toch geforceerd ophalen?',
   'interactiveSearch.auditReason': 'Verplichte auditreden voor deze override',

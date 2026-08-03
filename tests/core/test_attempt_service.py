@@ -2,8 +2,14 @@ from __future__ import annotations
 
 import sqlite3
 
+import pytest
+
 from bookflow.core.attempt_policy import FailureCode, FailureDisposition
-from bookflow.core.attempt_service import AttemptService
+from bookflow.core.attempt_service import (
+    AttemptService,
+    CandidateRetryConflictError,
+    CandidateRetryNotFoundError,
+)
 from bookflow.core.release_candidates import ReleaseCandidate, ReleaseProfile
 from bookflow.core.request_workflow_service import RequestWorkflowService
 from bookflow.core.search_service import SearchService
@@ -183,6 +189,98 @@ def test_admin_selected_blocked_candidate_is_attempted_first(tmp_path):
 
     assert attempt is not None
     assert attempt["candidate_id"] == selected_id
+
+
+def _failed_selected_attempt(db_path, request_process_id):
+    service = AttemptService(db_path)
+    attempt = service.start_next_candidate(
+        request_process_id,
+        adapter_name="legacy_queue",
+        adapter=FakeAdapter(),
+    )
+    assert attempt is not None
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE release_candidates SET selected_by = 1, selected_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (attempt["candidate_id"],),
+        )
+        conn.execute(
+            "UPDATE request_attempts SET external_job_id = 'source:task-1' WHERE id = ?",
+            (attempt["id"],),
+        )
+    service.record_failure(attempt["id"], FailureCode.CONFIGURATION, error_message="bad path")
+    return service, attempt
+
+
+def test_selected_failed_candidate_retry_claim_is_atomic_and_reuses_attempt(tmp_path):
+    db_path = tmp_path / "users.db"
+    _alice, _bob, _book_id, process_id, _request_ids = _seed(db_path)
+    service, attempt = _failed_selected_attempt(db_path, process_id)
+
+    claim = service.claim_selected_candidate_retry(attempt["candidate_id"])
+
+    assert claim.request_attempt_id == attempt["id"]
+    assert claim.task_id == "task-1"
+    with sqlite3.connect(db_path) as conn:
+        stored = conn.execute(
+            "SELECT status, retry_count FROM request_attempts WHERE id = ?", (attempt["id"],)
+        ).fetchone()
+        process = conn.execute(
+            "SELECT status, active_request_attempt_id FROM request_processes WHERE id = ?",
+            (process_id,),
+        ).fetchone()
+    assert stored == ("submitted", 1)
+    assert process == ("downloading", attempt["id"])
+    with pytest.raises(CandidateRetryConflictError):
+        service.claim_selected_candidate_retry(attempt["candidate_id"])
+
+
+def test_selected_candidate_retry_rolls_back_failed_requeue(tmp_path):
+    db_path = tmp_path / "users.db"
+    _alice, _bob, _book_id, process_id, _request_ids = _seed(db_path)
+    service, attempt = _failed_selected_attempt(db_path, process_id)
+    claim = service.claim_selected_candidate_retry(attempt["candidate_id"])
+
+    service.rollback_selected_candidate_retry(claim)
+
+    with sqlite3.connect(db_path) as conn:
+        stored = conn.execute(
+            "SELECT status, retry_count, error_message FROM request_attempts WHERE id = ?",
+            (attempt["id"],),
+        ).fetchone()
+        process = conn.execute(
+            "SELECT status, active_request_attempt_id FROM request_processes WHERE id = ?",
+            (process_id,),
+        ).fetchone()
+    assert stored == ("failed", 0, "bad path")
+    assert process == ("needs_attention", None)
+
+
+def test_candidate_retry_rejects_missing_unselected_and_nonfailed_candidates(tmp_path):
+    db_path = tmp_path / "users.db"
+    _alice, _bob, _book_id, process_id, _request_ids = _seed(db_path)
+    service = AttemptService(db_path)
+    with pytest.raises(CandidateRetryNotFoundError):
+        service.claim_selected_candidate_retry(99999)
+
+    attempt = service.start_next_candidate(
+        process_id, adapter_name="legacy_queue", adapter=FakeAdapter()
+    )
+    assert attempt is not None
+    with pytest.raises(CandidateRetryConflictError, match="not selected"):
+        service.claim_selected_candidate_retry(attempt["candidate_id"])
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE release_candidates SET selected_by = 1, selected_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (attempt["candidate_id"],),
+        )
+        conn.execute(
+            "UPDATE request_processes SET active_request_attempt_id = NULL, status = 'needs_attention' WHERE id = ?",
+            (process_id,),
+        )
+    with pytest.raises(CandidateRetryConflictError, match="not failed"):
+        service.claim_selected_candidate_retry(attempt["candidate_id"])
 
 
 def test_completed_import_fulfils_all_recipients_and_grants_one_file(tmp_path):

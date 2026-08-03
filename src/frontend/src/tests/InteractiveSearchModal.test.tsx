@@ -64,6 +64,12 @@ const mockApi = (
     selected: true,
     forced: false,
   });
+  vi.spyOn(v1Api, 'retryCandidate').mockResolvedValue({
+    candidate_id: 99,
+    request_process_id: 4,
+    request_attempt_id: 7,
+    retried: true,
+  });
 };
 
 const renderModal = (language: 'en' | 'nl' = 'en') => {
@@ -202,6 +208,36 @@ describe('InteractiveSearchModal', () => {
     await waitFor(() =>
       expect(v1Api.selectCandidate).toHaveBeenLastCalledWith(2, true, 'Reviewed exception'),
     );
+  });
+
+  it('keeps successful selections disabled and retries an eligible failed selection', async () => {
+    mockApi('completed', [
+      candidate(1, { selected_by_admin: 1 }),
+      candidate(2, { selected_by_admin: 1, retry_available: 1 }),
+    ]);
+    const { props } = renderModal();
+
+    const selected = await screen.findByRole('button', { name: 'Selected' });
+    expect(selected).toHaveProperty('disabled', true);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    await waitFor(() => expect(v1Api.retryCandidate).toHaveBeenCalledWith(2));
+    await waitFor(() => expect(props.onChanged).toHaveBeenCalled());
+    expect(props.onShowToast).toHaveBeenCalledWith('Download retry scheduled', 'success');
+    expect(v1Api.candidates).toHaveBeenCalledTimes(2);
+    expect(v1Api.attempts).toHaveBeenCalledTimes(2);
+    expect(v1Api.requestSearchRun).toHaveBeenCalledTimes(2);
+  });
+
+  it('shows candidate retry failures as a visible error and toast', async () => {
+    mockApi('completed', [candidate(2, { selected_by_admin: 1, retry_available: 1 })]);
+    vi.mocked(v1Api.retryCandidate).mockRejectedValue(new Error('Retry already active'));
+    const { props } = renderModal();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+
+    expect(await screen.findByText('Retry already active')).toBeTruthy();
+    expect(props.onShowToast).toHaveBeenCalledWith('Retry already active', 'error');
   });
 
   it('stops polling after unmount', async () => {

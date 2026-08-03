@@ -1,5 +1,5 @@
-import { useCallback, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useCallback, useRef, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 
 import { ManualEpubUpload } from '../components/ManualEpubUpload';
 import { useLanguage } from '../contexts/LanguageContext';
@@ -22,11 +22,17 @@ const errorMessage = (caught: unknown): string =>
 /** Book-centric request list. Admin actions operate on the shared request process. */
 export const RequestsPage = ({ isAdmin, onShowToast }: RequestsPageProps) => {
   const { t } = useLanguage();
+  const [searchParams] = useSearchParams();
+  const requestIdValue = Number(searchParams.get('requestId'));
+  const requestedRequestId =
+    Number.isSafeInteger(requestIdValue) && requestIdValue > 0 ? requestIdValue : null;
   const [requests, setRequests] = useState<Array<V1AdminRequest | V1UserRequest>>([]);
   const [requestProcesses, setRequestProcesses] = useState<V1RequestProcess[]>([]);
   const [history, setHistory] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const requestElements = useRef(new Map<number, HTMLElement>());
+  const focusedRequestId = useRef<number | null>(null);
   const [interactiveSearch, setInteractiveSearch] = useState<{
     requestProcess: V1RequestProcess;
     title: string;
@@ -55,6 +61,28 @@ export const RequestsPage = ({ isAdmin, onShowToast }: RequestsPageProps) => {
   useDependencyEffect(() => {
     void load();
   }, [load]);
+  useDependencyEffect(() => {
+    if (loading || requestedRequestId === null) return;
+    const target = requests.find((item) => item.id === requestedRequestId);
+    if (!target) {
+      if (focusedRequestId.current !== requestedRequestId) {
+        focusedRequestId.current = requestedRequestId;
+        onShowToast(`Request #${requestedRequestId} was not found.`, 'error');
+      }
+      return;
+    }
+    const showHistory = terminal.has(target.status);
+    if (history !== showHistory) {
+      setHistory(showHistory);
+      return;
+    }
+    if (focusedRequestId.current === requestedRequestId) return;
+    const element = requestElements.current.get(requestedRequestId);
+    if (!element) return;
+    focusedRequestId.current = requestedRequestId;
+    element.focus({ preventScroll: true });
+    element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, [history, loading, onShowToast, requestedRequestId, requests]);
 
   const action = async (operation: () => Promise<unknown>, success: string) => {
     try {
@@ -131,7 +159,21 @@ export const RequestsPage = ({ isAdmin, onShowToast }: RequestsPageProps) => {
             ? group.map((request) => ('requester_name' in request ? request.requester_name : null))
             : [];
           return (
-            <article key={bookId} className="mt-5 rounded-xl border border-(--border-muted) p-4">
+            <article
+              key={bookId}
+              ref={(element) => {
+                for (const item of group) {
+                  if (element) requestElements.current.set(item.id, element);
+                  else requestElements.current.delete(item.id);
+                }
+              }}
+              tabIndex={-1}
+              className={`mt-5 rounded-xl border p-4 outline-none ${
+                requestedRequestId !== null && group.some((item) => item.id === requestedRequestId)
+                  ? 'border-violet-500 ring-2 ring-violet-500/35'
+                  : 'border-(--border-muted)'
+              }`}
+            >
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <h2 className="font-semibold">

@@ -76,6 +76,29 @@ def test_retry_download_rejects_request_linked_tasks(monkeypatch):
     mock_queue.enqueue_existing.assert_not_called()
 
 
+def test_internal_candidate_retry_can_requeue_request_linked_error(monkeypatch):
+    import bookflow.download.orchestrator as orchestrator
+
+    task = DownloadTask(
+        task_id="task-request-retry",
+        source="prowlarr",
+        title="Request linked",
+        request_id=123,
+    )
+    mock_queue = MagicMock()
+    mock_queue.get_task.return_value = task
+    mock_queue.get_task_status.return_value = QueueStatus.ERROR
+    mock_queue.enqueue_existing.return_value = True
+    monkeypatch.setattr(orchestrator, "book_queue", mock_queue)
+    monkeypatch.setattr(orchestrator, "ws_manager", None)
+
+    ok, error = orchestrator.retry_download("task-request-retry", allow_request_fresh_retry=True)
+
+    assert ok is True
+    assert error is None
+    mock_queue.enqueue_existing.assert_called_once_with("task-request-retry", priority=-10)
+
+
 def test_can_retry_download_task_allows_request_postprocess_retry_when_staged_file_exists(tmp_path):
     import bookflow.download.orchestrator as orchestrator
 
