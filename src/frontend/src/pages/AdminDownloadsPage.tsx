@@ -4,6 +4,7 @@ interface AdminDownloadsPageProps {
   status: StatusData;
   onCancel: (id: string) => void;
   onRetry: (id: string) => void;
+  onOpenRequest: (requestId: number) => void;
   onRefresh: () => void;
 }
 
@@ -21,6 +22,7 @@ export const AdminDownloadsPage = ({
   status,
   onCancel,
   onRetry,
+  onOpenRequest,
   onRefresh,
 }: AdminDownloadsPageProps) => (
   <section className="pb-16">
@@ -68,7 +70,7 @@ export const AdminDownloadsPage = ({
                         Cancel
                       </button>
                     )}
-                    {(key === 'error' || key === 'cancelled') && (
+                    {(key === 'error' || key === 'cancelled') && book.retry_available === true && (
                       <button
                         type="button"
                         className="rounded border border-(--border-muted) px-3 py-1.5 text-xs"
@@ -77,6 +79,20 @@ export const AdminDownloadsPage = ({
                         Retry
                       </button>
                     )}
+                    {(key === 'error' || key === 'cancelled') &&
+                      book.retry_available !== true &&
+                      typeof book.request_id === 'number' &&
+                      book.request_id > 0 && (
+                        <button
+                          type="button"
+                          className="rounded border border-(--border-muted) px-3 py-1.5 text-xs"
+                          onClick={() => {
+                            if (typeof book.request_id === 'number') onOpenRequest(book.request_id);
+                          }}
+                        >
+                          Open request
+                        </button>
+                      )}
                   </div>
                 </article>
               ))}

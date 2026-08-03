@@ -5,6 +5,9 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
+from bookflow.core.attempt_policy import FailureCode
 from bookflow.core.release_candidates import ReleaseCandidate, ReleaseProfile
 from bookflow.core.request_runtime import RequestRuntime, decode_source_reference
 from bookflow.core.request_workflow_service import RequestWorkflowService
@@ -114,6 +117,127 @@ def test_terminal_completion_imports_once_and_fulfils_all_recipients(tmp_path: P
     assert statuses == [("fulfilled",), ("fulfilled",)]
     assert [row[0] for row in entitlements] == users
     assert acquired == ("completed",)
+
+
+def test_retried_selected_attempt_reconnects_terminal_import_and_completes_request(tmp_path):
+    database_path = tmp_path / "users.db"
+    request_process_id, users = _seed(database_path)
+    queued: list[dict] = []
+    retried: list[tuple[str, bool]] = []
+
+    def queue_release(payload, priority, user_id=None, username=None):
+        queued.append(payload)
+        return True, None
+
+    def retry_download(task_id, *, allow_request_fresh_retry=False):
+        retried.append((task_id, allow_request_fresh_retry))
+        return True, None
+
+    library = tmp_path / "library"
+    library.mkdir()
+    runtime = RequestRuntime(
+        str(database_path),
+        queue_release=queue_release,
+        retry_download=retry_download,
+        library_root=library,
+    )
+    _search(
+        runtime,
+        request_process_id,
+        [
+            ReleaseCandidate(
+                source="direct_download",
+                title="Dune",
+                format="epub",
+                protocol="direct",
+                metadata={"payload_reference": "source:direct_download:ZHVuZS1yZWxlYXNl"},
+            )
+        ],
+    )
+    attempt = runtime.start_attempt(request_process_id)
+    assert attempt is not None
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            "UPDATE release_candidates SET selected_by = 1, selected_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (attempt["candidate_id"],),
+        )
+    runtime._attempts.record_failure(
+        attempt["id"], FailureCode.CONFIGURATION, error_message="remote path mapping missing"
+    )
+
+    result = runtime.retry_selected_candidate(attempt["candidate_id"])
+
+    assert result["request_attempt_id"] == attempt["id"]
+    assert retried == [("dune-release", True)]
+    artifact = library / "Dune.epub"
+    artifact.write_bytes(b"an ebook")
+    runtime.handle_terminal(
+        SimpleNamespace(
+            task_id="dune-release",
+            source="direct_download",
+            library_paths=[str(artifact)],
+            download_path=str(artifact),
+            status_message=None,
+        ),
+        status="complete",
+    )
+
+    with sqlite3.connect(database_path) as connection:
+        attempt_status = connection.execute(
+            "SELECT status, retry_count FROM request_attempts WHERE id = ?", (attempt["id"],)
+        ).fetchone()
+        request_statuses = connection.execute(
+            "SELECT status FROM requests ORDER BY user_id"
+        ).fetchall()
+        entitled = connection.execute(
+            "SELECT user_id FROM user_file_entitlements ORDER BY user_id"
+        ).fetchall()
+    assert attempt_status == ("completed", 1)
+    assert request_statuses == [("fulfilled",), ("fulfilled",)]
+    assert [row[0] for row in entitled] == users
+
+
+def test_candidate_retry_rolls_back_when_legacy_requeue_fails(tmp_path):
+    database_path = tmp_path / "users.db"
+    request_process_id, _users = _seed(database_path)
+    library = tmp_path / "library"
+    library.mkdir()
+    runtime = RequestRuntime(
+        str(database_path),
+        queue_release=lambda *_args, **_kwargs: (True, None),
+        retry_download=lambda *_args, **_kwargs: (False, "queue rejected retry"),
+        library_root=library,
+    )
+    _search(
+        runtime,
+        request_process_id,
+        [
+            ReleaseCandidate(
+                source="direct_download",
+                title="Dune",
+                format="epub",
+                protocol="direct",
+                metadata={"payload_reference": "source:direct_download:ZHVuZS1yZWxlYXNl"},
+            )
+        ],
+    )
+    attempt = runtime.start_attempt(request_process_id)
+    assert attempt is not None
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            "UPDATE release_candidates SET selected_by = 1, selected_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (attempt["candidate_id"],),
+        )
+    runtime._attempts.record_failure(attempt["id"], FailureCode.CONFIGURATION)
+
+    with pytest.raises(RuntimeError, match="queue rejected retry"):
+        runtime.retry_selected_candidate(attempt["candidate_id"])
+
+    with sqlite3.connect(database_path) as connection:
+        stored = connection.execute(
+            "SELECT status, retry_count FROM request_attempts WHERE id = ?", (attempt["id"],)
+        ).fetchone()
+    assert stored == ("failed", 0)
 
 
 def test_permanent_failure_enqueues_next_candidate(tmp_path: Path) -> None:

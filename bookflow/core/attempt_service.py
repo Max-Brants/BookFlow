@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Never, Protocol
 
@@ -26,8 +27,39 @@ class AttemptServiceError(RuntimeError):
     """Raised when an request_process cannot safely start or finish an attempt."""
 
 
+class CandidateRetryNotFoundError(AttemptServiceError):
+    """Raised when the selected release candidate does not exist."""
+
+
+class CandidateRetryConflictError(AttemptServiceError):
+    """Raised when a selected release cannot safely be retried."""
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateRetryClaim:
+    """State required to requeue, or restore, one canonical failed attempt."""
+
+    candidate_id: int
+    request_process_id: int
+    request_attempt_id: int
+    task_id: str
+    retry_count: int
+    failure_code: str | None
+    failure_disposition: str | None
+    error_message: str | None
+    completed_at: str | None
+
+
 def _raise_attempt(message: str) -> Never:
     raise AttemptServiceError(message)
+
+
+def _raise_candidate_not_found(message: str) -> Never:
+    raise CandidateRetryNotFoundError(message)
+
+
+def _raise_candidate_conflict(message: str) -> Never:
+    raise CandidateRetryConflictError(message)
 
 
 def _required_request_attempt_id(cursor: sqlite3.Cursor) -> int:
@@ -325,6 +357,139 @@ class AttemptService:
             raise
         else:
             return decision.disposition
+        finally:
+            conn.close()
+
+    def claim_selected_candidate_retry(self, candidate_id: int) -> CandidateRetryClaim:
+        """Atomically reopen a selected failed attempt before its legacy task is requeued."""
+        conn = self._connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            candidate = conn.execute(
+                """
+                SELECT release_candidates.*, request_processes.status AS process_status,
+                       request_processes.active_request_attempt_id
+                FROM release_candidates
+                JOIN request_processes
+                  ON request_processes.id = release_candidates.request_process_id
+                WHERE release_candidates.id = ?
+                """,
+                (candidate_id,),
+            ).fetchone()
+            if candidate is None:
+                _raise_candidate_not_found("Candidate not found")
+            if candidate["selected_by"] is None or candidate["selected_at"] is None:
+                _raise_candidate_conflict("Candidate is not selected")
+            if candidate["process_status"] != "needs_attention":
+                _raise_candidate_conflict("Request process is not awaiting attention")
+            if candidate["active_request_attempt_id"] is not None:
+                _raise_candidate_conflict("Request process already has an active attempt")
+
+            attempt = conn.execute(
+                """
+                SELECT * FROM request_attempts
+                WHERE candidate_id = ?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (candidate_id,),
+            ).fetchone()
+            if attempt is None:
+                _raise_candidate_conflict("Candidate has no previous attempt")
+            if attempt["status"] != "failed":
+                _raise_candidate_conflict("Latest candidate attempt is not failed")
+            source = str(candidate["source"])
+            external_job_id = str(attempt["external_job_id"] or "")
+            prefix = f"{source}:"
+            if not external_job_id.startswith(prefix) or not external_job_id.removeprefix(prefix):
+                _raise_candidate_conflict("Candidate has no retryable download task")
+
+            claim = CandidateRetryClaim(
+                candidate_id=candidate_id,
+                request_process_id=int(candidate["request_process_id"]),
+                request_attempt_id=int(attempt["id"]),
+                task_id=external_job_id.removeprefix(prefix),
+                retry_count=int(attempt["retry_count"]),
+                failure_code=attempt["failure_code"],
+                failure_disposition=attempt["failure_disposition"],
+                error_message=attempt["error_message"],
+                completed_at=attempt["completed_at"],
+            )
+            now = datetime.now(UTC).isoformat(timespec="seconds")
+            updated = conn.execute(
+                """
+                UPDATE request_attempts
+                SET status = 'submitted', retry_count = retry_count + 1,
+                    failure_code = NULL, failure_disposition = NULL, error_message = NULL,
+                    completed_at = NULL, updated_at = ?
+                WHERE id = ? AND status = 'failed'
+                """,
+                (now, claim.request_attempt_id),
+            )
+            if updated.rowcount != 1:
+                _raise_candidate_conflict("Candidate retry is already in progress")
+            conn.execute(
+                """
+                UPDATE request_processes
+                SET status = 'downloading', active_request_attempt_id = ?,
+                    error_code = NULL, error_message = NULL, updated_at = ?
+                WHERE id = ?
+                """,
+                (claim.request_attempt_id, now, claim.request_process_id),
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        else:
+            return claim
+        finally:
+            conn.close()
+
+    def rollback_selected_candidate_retry(self, claim: CandidateRetryClaim) -> None:
+        """Restore a claimed retry when the legacy queue rejects the requeue."""
+        conn = self._connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            now = datetime.now(UTC).isoformat(timespec="seconds")
+            restored = conn.execute(
+                """
+                UPDATE request_attempts
+                SET status = 'failed', retry_count = ?, failure_code = ?,
+                    failure_disposition = ?, error_message = ?, completed_at = ?, updated_at = ?
+                WHERE id = ? AND status = 'submitted' AND retry_count = ?
+                """,
+                (
+                    claim.retry_count,
+                    claim.failure_code,
+                    claim.failure_disposition,
+                    claim.error_message,
+                    claim.completed_at,
+                    now,
+                    claim.request_attempt_id,
+                    claim.retry_count + 1,
+                ),
+            )
+            if restored.rowcount == 1:
+                conn.execute(
+                    """
+                    UPDATE request_processes
+                    SET status = 'needs_attention', active_request_attempt_id = NULL,
+                        error_code = ?, error_message = ?, updated_at = ?
+                    WHERE id = ? AND active_request_attempt_id = ?
+                    """,
+                    (
+                        claim.failure_code,
+                        claim.error_message,
+                        now,
+                        claim.request_process_id,
+                        claim.request_attempt_id,
+                    ),
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             conn.close()
 

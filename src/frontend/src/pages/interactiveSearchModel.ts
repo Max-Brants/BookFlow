@@ -19,6 +19,7 @@ export interface InteractiveCandidate {
   decision: InteractiveDecision;
   rejectReasons: string[];
   selected: boolean;
+  retryAvailable: boolean;
 }
 
 export interface InteractiveCandidateFallbacks {
@@ -56,6 +57,7 @@ export const toInteractiveCandidate = (
     decision,
     rejectReasons: candidate.reject_reasons ?? [],
     selected: candidate.selected_by_admin === 1,
+    retryAvailable: candidate.retry_available === 1,
   };
 };
 

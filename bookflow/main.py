@@ -312,6 +312,11 @@ try:
     register_admin_routes(app, user_db)
     register_self_user_routes(app, user_db)
 
+    def _retry_selected_candidate(candidate_id: int) -> dict[str, int]:
+        if request_runtime is None:
+            raise RuntimeError("Download retry service is unavailable")
+        return request_runtime.retry_selected_candidate(candidate_id)
+
     register_v1_api(
         app,
         database_path=_user_db_path,
@@ -321,6 +326,7 @@ try:
             normalize_optional_text(app_config.get("DESTINATION", "/books")) or "/books"
         ),
         kobo_fulfilment=_apply_manual_kobo_fulfilment,
+        retry_candidate=_retry_selected_candidate,
     )
     # Catalog bytes are intentionally removed only after the database commit.
     # Resume any durable cleanup outbox entries at startup; individual failures
@@ -392,6 +398,7 @@ try:
         request_runtime = RequestRuntime(
             _user_db_path,
             queue_release=backend.queue_release,
+            retry_download=backend.retry_download,
             library_root=Path(
                 normalize_optional_text(app_config.get("DESTINATION", "/books")) or "/books"
             ),

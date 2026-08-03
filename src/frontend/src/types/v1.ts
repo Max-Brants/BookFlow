@@ -375,6 +375,7 @@ export interface V1Candidate {
   reject_reasons?: string[];
   blocked?: 0 | 1;
   selected_by_admin?: 0 | 1;
+  retry_available?: 0 | 1;
   selected_at?: string | null;
 }
 

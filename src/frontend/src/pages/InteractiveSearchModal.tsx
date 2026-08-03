@@ -200,6 +200,18 @@ export const InteractiveSearchModal = ({
     }
   };
 
+  const retry = async (candidate: V1Candidate) => {
+    try {
+      await v1Api.retryCandidate(candidate.id);
+      onShowToast(t('interactiveSearch.retrySuccess'), 'success');
+      await Promise.all([searchRun ? refreshRun(searchRun.id) : Promise.resolve(), onChanged()]);
+    } catch (caught) {
+      const message = errorMessage(caught, t('interactiveSearch.failed'));
+      setError(message);
+      onShowToast(message, 'error');
+    }
+  };
+
   const presented = useMemo(
     () =>
       sortInteractiveCandidates(candidates, sort).map((candidate) =>
@@ -237,6 +249,8 @@ export const InteractiveSearchModal = ({
     return `⚠ ${t('interactiveSearch.rejected')}`;
   };
   const actionLabel = (candidate: V1Candidate): string => {
+    if (candidate.selected_by_admin === 1 && candidate.retry_available === 1)
+      return t('interactiveSearch.retry');
     if (candidate.selected_by_admin === 1) return t('interactiveSearch.selected');
     return isRejected(candidate)
       ? t('interactiveSearch.grabOverride')
@@ -459,8 +473,10 @@ export const InteractiveSearchModal = ({
               <button
                 type="button"
                 className="min-h-11 w-full rounded-lg bg-violet-600 px-4 text-sm font-semibold text-white disabled:opacity-50 sm:w-auto"
-                onClick={() => void grab(item.candidate)}
-                disabled={item.selected}
+                onClick={() =>
+                  void (item.retryAvailable ? retry(item.candidate) : grab(item.candidate))
+                }
+                disabled={item.selected && !item.retryAvailable}
               >
                 {actionLabel(item.candidate)}
               </button>

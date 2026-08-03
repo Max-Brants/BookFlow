@@ -597,6 +597,14 @@ export const v1Api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ force, reason }),
     }),
+  retryCandidate: (
+    candidateId: number,
+  ): Promise<{
+    candidate_id: number;
+    request_process_id: number;
+    request_attempt_id: number;
+    retried: true;
+  }> => requestV1(`/admin/candidates/${candidateId}/retry`, { method: 'POST' }),
   blockCandidate: (candidateId: number): Promise<{ blocked: boolean }> =>
     requestV1(`/admin/candidates/${candidateId}/block`, { method: 'POST' }),
   koboSettings: (): Promise<V1KoboSettings> => requestV1('/users/me/kobo-settings'),

@@ -37,6 +37,7 @@ from bookflow.metadata_providers import BookMetadata
 from bookflow.release_sources import Release, get_source, list_available_sources
 
 QueueRelease = Callable[..., tuple[bool, str | None]]
+RetryDownload = Callable[..., tuple[bool, str | None]]
 KoboFulfilment = Callable[[int, int, int], None]
 
 
@@ -139,6 +140,7 @@ class RequestRuntime:
         database_path: str,
         *,
         queue_release: QueueRelease,
+        retry_download: RetryDownload | None = None,
         library_root: Path,
         worker_id: str | None = None,
         poll_interval: float = 2.0,
@@ -148,6 +150,7 @@ class RequestRuntime:
             raise ValueError("poll_interval must be positive")
         self._database_path = database_path
         self._queue_release = queue_release
+        self._retry_download = retry_download
         self._jobs = DurableJobService(database_path)
         self._search = SearchService(database_path)
         self._attempts = AttemptService(database_path)
@@ -241,6 +244,28 @@ class RequestRuntime:
             adapter_name="legacy_queue",
             adapter=self._adapter,
         )
+
+    def retry_selected_candidate(self, candidate_id: int) -> dict[str, int]:
+        """Reopen and requeue the existing legacy task for a selected failed candidate."""
+        if self._retry_download is None:
+            raise RuntimeError("Download retry service is unavailable")
+        claim = self._attempts.claim_selected_candidate_retry(candidate_id)
+        try:
+            success, message = self._retry_download(
+                claim.task_id,
+                allow_request_fresh_retry=True,
+            )
+        except Exception:
+            self._attempts.rollback_selected_candidate_retry(claim)
+            raise
+        if not success:
+            self._attempts.rollback_selected_candidate_retry(claim)
+            raise RuntimeError(message or "Failed to requeue download")
+        return {
+            "candidate_id": claim.candidate_id,
+            "request_process_id": claim.request_process_id,
+            "request_attempt_id": claim.request_attempt_id,
+        }
 
     def handle_terminal(self, task: Any, *, status: str) -> None:
         """Translate a legacy terminal task into canonical attempt state.
