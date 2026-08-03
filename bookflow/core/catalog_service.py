@@ -336,6 +336,10 @@ class CatalogService:
                     "SELECT * FROM book_files WHERE sha256 = ?", (published_file.sha256,)
                 ).fetchone()
                 if existing is not None:
+                    if int(existing["book_id"]) != book_id:
+                        raise CatalogServiceError(
+                            "This file is already attached to a different Book"
+                        )
                     conn.commit()
                     return dict(existing)
                 if derived_from_file_id is not None:
@@ -392,6 +396,16 @@ class CatalogService:
                                reviewed_at=COALESCE(reviewed_at, ?), updated_at=? WHERE id=?""",
                             (row["id"], now, now, now, request["id"]),
                         )
+                    conn.execute(
+                        """
+                        UPDATE request_processes
+                        SET status='completed', monitoring_enabled=0,
+                            active_request_attempt_id=NULL, completed_at=?, updated_at=?
+                        WHERE book_id=? AND content_type=?
+                          AND status NOT IN ('completed','cancelled','failed')
+                        """,
+                        (now, now, book_id, normalized_content_type),
+                    )
                 conn.commit()
                 if row is None:
                     raise CatalogServiceError("Failed to load imported file")

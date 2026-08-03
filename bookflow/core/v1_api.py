@@ -9,8 +9,11 @@ from __future__ import annotations
 import hashlib
 import json
 import mimetypes
+import os
 import sqlite3
+import tempfile
 import uuid
+from contextlib import suppress
 from dataclasses import dataclass
 from functools import wraps
 from pathlib import Path
@@ -28,7 +31,10 @@ from bookflow.core.catalog_deletion_service import (
     CatalogDeletionService,
 )
 from bookflow.core.catalog_monitor_service import CatalogMonitorError, CatalogMonitorService
+from bookflow.core.catalog_service import CatalogService, CatalogServiceError
 from bookflow.core.durable_jobs import DurableJobService
+from bookflow.core.file_store import FileStore, FileStoreError
+from bookflow.core.kepub_converter import KepubConversionError, validate_epub_container
 from bookflow.core.library_service import LibraryService
 from bookflow.core.path_security import PathSecurityError
 from bookflow.core.release_candidates import ReleaseCandidate, evaluate_candidate
@@ -65,6 +71,8 @@ def register_v1_api(
     resolve_actor: Callable[[], V1Actor | None],
     default_profile: Callable[[], dict[str, Any]] | None = None,
     resolve_file_path: Callable[[str], Path] | None = None,
+    library_root: str | Path | None = None,
+    kobo_fulfilment: Callable[[int, int, int], None] | None = None,
 ) -> None:
     """Register the standalone ``/api/v1`` Blueprint on an application.
 
@@ -81,6 +89,8 @@ def register_v1_api(
     library_service = LibraryService(db_path)
     catalog_deletion_service = CatalogDeletionService(db_path, resolve_file_path)
     suggestion_service = BestsellerSuggestionService(db_path)
+    import_service = CatalogService(db_path)
+    import_root = Path(library_root) if library_root is not None else None
     blueprint = Blueprint("v1", __name__, url_prefix="/api/v1")
 
     @blueprint.before_request
@@ -329,6 +339,9 @@ def register_v1_api(
                     "get": {"summary": "List the current user's recent requests"}
                 },
                 "/api/v1/admin/requests": {"get": {"summary": "List requests"}},
+                "/api/v1/admin/catalog/books/{bookId}/files": {
+                    "post": {"summary": "Upload an EPUB for an existing Book"}
+                },
                 "/api/v1/admin/request-processes": {"get": {"summary": "List request processes"}},
                 "/api/v1/admin/request-processes/{requestProcessId}/search-now": {
                     "post": {"summary": "Schedule a request search"}
@@ -1903,6 +1916,91 @@ def register_v1_api(
             updated = conn.execute("SELECT * FROM requests WHERE id = ?", (request_id,)).fetchone()
         enqueue_request_status(dict(updated))
         return jsonify({"request_id": request_id, "status": "rejected"}), 202
+
+    @blueprint.post("/admin/catalog/books/<int:book_id>/files")
+    @require_actor(admin=True)
+    def upload_catalog_epub(book_id: int) -> tuple[Response, int] | Response:
+        """Safely import one administrator-supplied EPUB for an existing Book."""
+        max_upload_bytes = 100 * 1024 * 1024
+        if import_root is None:
+            return error("file_service_unavailable", "Catalog file service is unavailable", 503)
+        if request.content_length is not None and request.content_length > max_upload_bytes + 65536:
+            return error("file_too_large", "EPUB files may not exceed 100 MiB", 413)
+        upload = request.files.get("file")
+        if upload is None or not upload.filename:
+            return error("file_required", "An EPUB file is required", 400)
+        if Path(upload.filename).suffix.casefold() != ".epub":
+            return error("invalid_epub", "The uploaded file must use the .epub extension", 400)
+        with connect() as conn:
+            if conn.execute("SELECT 1 FROM books WHERE id = ?", (book_id,)).fetchone() is None:
+                return error("book_not_found", "Book not found", 404)
+
+        temporary_path: Path | None = None
+        try:
+            store = FileStore(import_root)
+            with tempfile.NamedTemporaryFile(
+                mode="xb",
+                dir=store.storage_root,
+                prefix=".manual-upload-",
+                suffix=".epub",
+                delete=False,
+            ) as temporary:
+                temporary_path = Path(temporary.name)
+                total = 0
+                while chunk := upload.stream.read(1024 * 1024):
+                    total += len(chunk)
+                    if total > max_upload_bytes:
+                        return error("file_too_large", "EPUB files may not exceed 100 MiB", 413)
+                    temporary.write(chunk)
+                temporary.flush()
+                os.fsync(temporary.fileno())
+            if total == 0:
+                return error("invalid_epub", "The uploaded EPUB is empty", 400)
+            validate_epub_container(temporary_path, "Uploaded EPUB")
+            imported = import_service.publish_and_register_imported_file(
+                book_id=book_id,
+                file_store=store,
+                source_path=temporary_path,
+                source_roots=(store.storage_root,),
+                release_source="manual_upload",
+                content_type="ebook",
+            )
+        except KepubConversionError as exc:
+            return error("invalid_epub", str(exc), 400)
+        except (CatalogServiceError, FileStoreError, OSError, ValueError) as exc:
+            return error("manual_import_failed", str(exc), 409)
+        finally:
+            if temporary_path is not None:
+                temporary_path.unlink(missing_ok=True)
+
+        with connect() as conn:
+            fulfilled = conn.execute(
+                """SELECT * FROM requests WHERE book_id=? AND content_type='ebook'
+                   AND status='fulfilled' AND fulfilled_file_id=?""",
+                (book_id, imported["id"]),
+            ).fetchall()
+        fulfilled_ids = [int(row["id"]) for row in fulfilled]
+        for row in fulfilled:
+            enqueue_request_status(dict(row))
+            if bool(row["add_to_kobo_when_available"]) and kobo_fulfilment is not None:
+                # Kobo is an optional projection; the durable file import remains complete.
+                with suppress(OSError, RuntimeError, ValueError, sqlite3.Error):
+                    kobo_fulfilment(int(row["user_id"]), book_id, int(imported["id"]))
+        return (
+            jsonify(
+                {
+                    "file": {
+                        "id": int(imported["id"]),
+                        "book_id": int(imported["book_id"]),
+                        "file_format": str(imported["file_format"]),
+                        "size_bytes": int(imported["size_bytes"]),
+                        "mime_type": imported.get("mime_type"),
+                    },
+                    "fulfilled_request_ids": fulfilled_ids,
+                }
+            ),
+            201,
+        )
 
     @blueprint.get("/admin/request-processes")
     @require_actor(admin=True)

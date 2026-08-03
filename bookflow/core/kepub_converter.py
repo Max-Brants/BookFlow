@@ -263,7 +263,7 @@ class KepubConverter:
             and ".tmp.epub" not in resolved.name
         ):
             raise KepubConversionError("KEPUB output must use a controlled .kepub.epub name")
-        _validate_epub_container(resolved, label)
+        validate_epub_container(resolved, label)
         return resolved
 
     @staticmethod
@@ -445,7 +445,8 @@ def _thread_lock_for(cache_key: str) -> threading.Lock:
         return _THREAD_LOCKS.setdefault(cache_key, threading.Lock())
 
 
-def _validate_epub_container(path: Path, label: str) -> None:
+def validate_epub_container(path: Path, label: str = "EPUB") -> None:
+    """Validate the structural and path-safety requirements of an EPUB container."""
     if not zipfile.is_zipfile(path):
         raise KepubConversionError(f"{label} is not a ZIP container")
     try:

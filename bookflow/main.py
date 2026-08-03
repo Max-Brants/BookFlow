@@ -251,6 +251,13 @@ activity_view_state_service: ActivityViewStateService | None = None
 library_service: LibraryService | None = None
 request_runtime: RequestRuntime | None = None
 github_issue_service: GitHubIssueService | None = None
+manual_kobo_fulfilment: Callable[[int, int, int], None] | None = None
+
+
+def _apply_manual_kobo_fulfilment(user_id: int, book_id: int, file_id: int) -> None:
+    callback = manual_kobo_fulfilment
+    if callback is not None:
+        callback(user_id, book_id, file_id)
 
 
 def resolve_v1_actor() -> V1Actor | None:
@@ -310,6 +317,10 @@ try:
         database_path=_user_db_path,
         resolve_actor=resolve_v1_actor,
         resolve_file_path=_resolve_library_file_for_serving,
+        library_root=Path(
+            normalize_optional_text(app_config.get("DESTINATION", "/books")) or "/books"
+        ),
+        kobo_fulfilment=_apply_manual_kobo_fulfilment,
     )
     # Catalog bytes are intentionally removed only after the database commit.
     # Resume any durable cleanup outbox entries at startup; individual failures
@@ -1162,19 +1173,20 @@ if user_db is not None:
             ),
             release_version=RELEASE_VERSION,
         )
+
+        def _add_fulfilled_book_to_kobo(user_id: int, book_id: int, file_id: int) -> None:
+            # The request flag is explicit Kobo intent, so it may enable the
+            # user's isolated shelf before adding the just-granted entitlement.
+            kobo_sync_service.enable_user(user_id=user_id)
+            kobo_sync_service.set_book(
+                user_id=user_id,
+                book_id=book_id,
+                file_id=file_id,
+                source="request",
+            )
+
+        manual_kobo_fulfilment = _add_fulfilled_book_to_kobo
         if request_runtime is not None:
-
-            def _add_fulfilled_book_to_kobo(user_id: int, book_id: int, file_id: int) -> None:
-                # The request flag is explicit Kobo intent, so it may enable the
-                # user's isolated shelf before adding the just-granted entitlement.
-                kobo_sync_service.enable_user(user_id=user_id)
-                kobo_sync_service.set_book(
-                    user_id=user_id,
-                    book_id=book_id,
-                    file_id=file_id,
-                    source="request",
-                )
-
             request_runtime.set_kobo_fulfilment(_add_fulfilled_book_to_kobo)
     except OSError, sqlite3.Error, ValueError:
         logger.exception("Kobo services unavailable")

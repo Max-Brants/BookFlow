@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react';
 import { Link } from 'react-router-dom';
 
+import { ManualEpubUpload } from '../components/ManualEpubUpload';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useDependencyEffect } from '../hooks/useMountEffect';
 import { v1Api } from '../services/v1Api';
@@ -197,6 +198,19 @@ export const RequestsPage = ({ isAdmin, onShowToast }: RequestsPageProps) => {
                       Reject
                     </button>
                   </>
+                )}
+                {isAdmin && (
+                  <ManualEpubUpload
+                    bookId={bookId}
+                    onUploaded={async () => {
+                      onShowToast(t('manualUpload.complete'), 'success');
+                      await load();
+                    }}
+                    onError={(message) => {
+                      setError(message);
+                      onShowToast(message, 'error');
+                    }}
+                  />
                 )}
                 {isAdmin &&
                   requestProcess &&
