@@ -126,7 +126,10 @@ def test_request_notification_context_resolves_shared_request_process(user_db):
         conn.executemany(
             "INSERT INTO request_process_recipients (request_process_id, user_id, request_id) "
             "VALUES (?, ?, ?)",
-            [(process_id, user_id, request_id) for user_id, request_id in zip(user_ids, request_ids)],
+            [
+                (process_id, user_id, request_id)
+                for user_id, request_id in zip(user_ids, request_ids, strict=True)
+            ],
         )
         conn.commit()
     finally:

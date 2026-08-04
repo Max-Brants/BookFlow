@@ -3241,7 +3241,7 @@ class UserDB:
                     requesters.append(username)
 
             return {
-                "book_id": int(row["id"] if "id" in row.keys() else row["book_id"]),
+                "book_id": int(row["id"]),
                 "title": row["title"],
                 "author": row["author"],
                 "cover_url": row["cover_url"],
