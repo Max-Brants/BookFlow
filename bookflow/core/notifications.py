@@ -359,16 +359,14 @@ def _render_message(context: NotificationContext) -> tuple[str, str]:
     if event == NotificationEvent.DOWNLOAD_COMPLETE:
         return (
             "Download Complete",
-            f'"{title}" by {author} downloaded successfully.'
-            f"{_requested_by_line(context)}",
+            f'"{title}" by {author} downloaded successfully.{_requested_by_line(context)}',
         )
 
     error_message = _clean_text(context.error_message, "")
     error_line = f"\nError: {error_message}" if error_message else ""
     return (
         "Download Failed",
-        f'Failed to download "{title}" by {author}.{error_line}'
-        f"{_requested_by_line(context)}",
+        f'Failed to download "{title}" by {author}.{error_line}{_requested_by_line(context)}',
     )
 
 
@@ -522,9 +520,7 @@ def _dispatch_to_apprise(
             try:
                 attachment_url = _normalize_attachment_url(attach)
                 if attachment_url is None:
-                    delivered = bool(
-                        apobj.notify(title=title, body=body, notify_type=notify_type)
-                    )
+                    delivered = bool(apobj.notify(title=title, body=body, notify_type=notify_type))
                 else:
                     try:
                         delivered = bool(

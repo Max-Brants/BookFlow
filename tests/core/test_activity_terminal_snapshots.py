@@ -117,9 +117,7 @@ class TestTerminalSnapshotCapture:
         finally:
             main_module.backend.book_queue.cancel_download(task_id)
 
-    def test_request_complete_notification_includes_requesters_and_cover(
-        self, main_module
-    ):
+    def test_request_complete_notification_includes_requesters_and_cover(self, main_module):
         user = _create_user(main_module, prefix="snap-request-notify")
         task_id = f"notify-request-{uuid.uuid4().hex[:8]}"
         task = DownloadTask(
