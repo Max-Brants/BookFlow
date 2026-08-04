@@ -1935,11 +1935,36 @@ def _notify_admin_for_terminal_download_status(
     if event is None:
         return
 
+    request_id = normalize_positive_int(getattr(task, "request_id", None))
+    book_id = normalize_positive_int(getattr(task, "library_book_id", None))
+    request_context: dict[str, Any] | None = None
+    if user_db is not None and (request_id is not None or book_id is not None):
+        try:
+            request_context = user_db.get_request_notification_context(
+                request_id=request_id,
+                book_id=book_id,
+            )
+        except _OPERATIONAL_ERRORS as exc:
+            logger.warning(
+                "Failed to resolve requesters for download notification %s: %s",
+                task_id,
+                exc,
+            )
+
+    requesters = request_context.get("requesters", []) if request_context else []
+    if not isinstance(requesters, (list, tuple)):
+        requesters = []
+    title = request_context.get("title") if request_context else None
+    author = request_context.get("author") if request_context else None
+    cover_url = request_context.get("cover_url") if request_context else None
+    resolved_book_id = (
+        normalize_positive_int(request_context.get("book_id")) if request_context else book_id
+    )
     content_type = normalize_optional_text(getattr(task, "content_type", None))
     context = NotificationContext(
         event=event,
-        title=str(getattr(task, "title", "Unknown title") or "Unknown title"),
-        author=str(getattr(task, "author", "Unknown author") or "Unknown author"),
+        title=str(title or getattr(task, "title", "Unknown title") or "Unknown title"),
+        author=str(author or getattr(task, "author", "Unknown author") or "Unknown author"),
         username=normalize_optional_text(getattr(task, "username", None)),
         content_type=normalize_content_type(content_type) if content_type is not None else None,
         format=normalize_optional_text(getattr(task, "format", None)),
@@ -1949,6 +1974,9 @@ def _notify_admin_for_terminal_download_status(
             if event == NotificationEvent.DOWNLOAD_FAILED
             else None
         ),
+        book_id=resolved_book_id,
+        requesters=tuple(str(requester) for requester in requesters),
+        cover_url=str(cover_url) if cover_url else None,
     )
     try:
         notify_admin(event, context)

@@ -3138,9 +3138,115 @@ class UserDB:
         conn = self._connect()
         try:
             row = conn.execute(
-                "SELECT id, title, author FROM books WHERE id = ?", (book_id,)
+                "SELECT id, title, author, cover_url FROM books WHERE id = ?", (book_id,)
             ).fetchone()
             return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def get_request_notification_context(
+        self, *, request_id: int | None = None, book_id: int | None = None
+    ) -> dict[str, Any] | None:
+        """Return the Book and requester projection needed by admin notifications.
+
+        New request-process downloads carry one canonical ``requests.id`` in
+        their task snapshot.  The legacy admin fulfilment route does not carry
+        a request id, so its pending requesters are resolved by Book instead.
+        """
+        conn = self._connect()
+        try:
+            row = None
+            requester_rows: list[Any] = []
+            if request_id is not None:
+                row = conn.execute(
+                    """
+                    SELECT requests.book_id, books.id, books.title, books.author, books.cover_url,
+                           requests.request_process_id, requests.user_id
+                    FROM requests
+                    JOIN books ON books.id = requests.book_id
+                    WHERE requests.id = ?
+                    """,
+                    (request_id,),
+                ).fetchone()
+                if row is not None and row["request_process_id"] is not None:
+                    requester_rows = conn.execute(
+                        """
+                        SELECT DISTINCT users.username
+                        FROM request_process_recipients
+                        JOIN users ON users.id = request_process_recipients.user_id
+                        WHERE request_process_recipients.request_process_id = ?
+                        ORDER BY request_process_recipients.created_at,
+                                 request_process_recipients.request_id
+                        """,
+                        (row["request_process_id"],),
+                    ).fetchall()
+                if row is not None and not requester_rows:
+                    requester_rows = conn.execute(
+                        "SELECT username FROM users WHERE id = ?", (row["user_id"],)
+                    ).fetchall()
+
+                if row is None:
+                    row = conn.execute(
+                        """
+                        SELECT download_requests.book_id, books.id, books.title,
+                               books.author, books.cover_url, download_requests.user_id
+                        FROM download_requests
+                        JOIN books ON books.id = download_requests.book_id
+                        WHERE download_requests.id = ?
+                        """,
+                        (request_id,),
+                    ).fetchone()
+                    if row is not None:
+                        requester_rows = conn.execute(
+                            "SELECT username FROM users WHERE id = ?", (row["user_id"],)
+                        ).fetchall()
+
+            if row is None and book_id is not None:
+                row = conn.execute(
+                    "SELECT id, title, author, cover_url FROM books WHERE id = ?",
+                    (book_id,),
+                ).fetchone()
+                if row is not None:
+                    requester_rows = conn.execute(
+                        """
+                        SELECT DISTINCT users.username
+                        FROM requests
+                        JOIN users ON users.id = requests.user_id
+                        WHERE requests.book_id = ?
+                          AND requests.status IN ('pending_approval', 'approved')
+                        ORDER BY requests.created_at, requests.id
+                        """,
+                        (book_id,),
+                    ).fetchall()
+                    legacy_rows = conn.execute(
+                        """
+                        SELECT DISTINCT users.username
+                        FROM download_requests
+                        JOIN users ON users.id = download_requests.user_id
+                        WHERE download_requests.book_id = ?
+                          AND download_requests.status = 'pending'
+                        ORDER BY download_requests.created_at, download_requests.id
+                        """,
+                        (book_id,),
+                    ).fetchall()
+                    requester_rows.extend(legacy_rows)
+
+            if row is None:
+                return None
+
+            requesters: list[str] = []
+            for requester_row in requester_rows:
+                username = str(requester_row["username"] or "").strip()
+                if username and username not in requesters:
+                    requesters.append(username)
+
+            return {
+                "book_id": int(row["id"] if "id" in row.keys() else row["book_id"]),
+                "title": row["title"],
+                "author": row["author"],
+                "cover_url": row["cover_url"],
+                "requesters": requesters,
+            }
         finally:
             conn.close()
 
