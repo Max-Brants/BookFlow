@@ -239,7 +239,7 @@ def html_get_page(
         cancel_flag: Optional event used to abort retries early.
         status_callback: Optional callback for UI status updates.
         allow_bypasser_fallback: If False, 403 errors will trigger mirror rotation
-            instead of switching to the bypasser. Use for search operations.
+            instead of switching to the bypasser.
         use_bypasser: Whether to start with the bypasser instead of direct HTTP.
         include_response_url: If True, return `(html, final_url)` to expose the
             resolved response URL after redirects.
