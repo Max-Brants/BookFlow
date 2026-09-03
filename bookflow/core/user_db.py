@@ -27,6 +27,7 @@ from bookflow.core.request_validation import (
     normalize_request_status,
     validate_status_transition,
 )
+from bookflow.core.requests_service import enforce_request_limits
 
 logger = setup_logger(__name__)
 
@@ -3012,6 +3013,7 @@ class UserDB:
         with self._lock:
             conn = self._connect()
             try:
+                conn.execute("BEGIN IMMEDIATE")
                 book = conn.execute(
                     "SELECT id, title, author FROM books WHERE id = ?", (book_id,)
                 ).fetchone()
@@ -3043,6 +3045,7 @@ class UserDB:
                 ).fetchone()
                 if duplicate is not None:
                     raise ValueError("Duplicate pending Request exists for this Book")
+                enforce_request_limits(conn, user_id=user_id)
                 cursor = conn.execute(
                     "INSERT INTO download_requests (user_id, book_id, note) VALUES (?, ?, ?)",
                     (user_id, book_id, note),
