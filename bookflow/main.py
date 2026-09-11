@@ -1170,12 +1170,14 @@ if user_db is not None:
             app,
             resolve_actor=resolve_v1_actor,
             service=pairing_service,
-            patcher_cache=Path(os.environ.get("CONFIG_DIR", "/config")) / "patcher-cache",
+            patcher_cache=Path(os.environ.get("CONFIG_DIR", "/config")) / "kobopatcher",
+            bundled_patcher_dir=Path("/opt/bookflow/kobo-patcher"),
             config_root=Path(os.environ.get("CONFIG_DIR", "/config")),
             release_api_url=normalize_optional_text(
                 os.environ.get(
                     "KOBO_PATCHER_RELEASE_API_URL",
-                    "https://api.github.com/repos/muneebabbas/bookflow/releases/latest",
+                    "https://api.github.com/repos/Timminater/BookFlow/releases/tags/"
+                    f"v{RELEASE_VERSION.removeprefix('v')}",
                 )
             ),
             release_version=RELEASE_VERSION,
@@ -1228,6 +1230,19 @@ def enforce_auth_availability() -> Response | tuple[Response, int] | None:
 def enforce_browser_mutation_origin() -> Response | tuple[Response, int] | None:
     """Reject cross-site state changes made with ambient browser credentials."""
     if request.method in {"GET", "HEAD", "OPTIONS", "TRACE"}:
+        return None
+    # Reader requests authenticate with the URL token, and pairing exchanges
+    # with a signed one-time code/session. Neither uses ambient cookies.
+    # Keep browser provenance checks on account/settings/code-creation routes.
+    if (
+        not request.headers.get("Origin")
+        and not request.headers.get("Sec-Fetch-Site")
+        and (
+            request.blueprint == "kobo_mvp"
+            or request.endpoint
+            in {"kobo_pairing.claim", "kobo_pairing.complete", "kobo_pairing.revoke_session"}
+        )
+    ):
         return None
     if app.config.get("TESTING") and not app.config.get("ENFORCE_MUTATION_ORIGIN"):
         return None

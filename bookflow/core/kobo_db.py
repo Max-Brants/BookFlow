@@ -50,6 +50,13 @@ CREATE TABLE IF NOT EXISTS user_kobo_books (
 CREATE INDEX IF NOT EXISTS idx_user_kobo_books_active
 ON user_kobo_books (user_id, desired_state, revision DESC);
 
+CREATE TABLE IF NOT EXISTS kobo_reading_states (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    book_id INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+    state_json TEXT NOT NULL,
+    PRIMARY KEY (user_id, book_id)
+);
+
 CREATE TABLE IF NOT EXISTS user_kobo_changes (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,

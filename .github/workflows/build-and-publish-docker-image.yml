@@ -17,7 +17,16 @@ env:
   IMAGE_NAME: ${{ github.repository_owner }}/bookflow
 
 jobs:
+  patcher:
+    permissions:
+      contents: write
+    uses: ./.github/workflows/kobo-patcher.yml
+    with:
+      version: "1.2.9"
+    secrets: inherit
+
   build-and-push-images:
+    needs: patcher
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -38,6 +47,18 @@ jobs:
 
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Bundle the tested Windows patcher in both images
+        uses: actions/download-artifact@v8
+        with:
+          name: BookFlowKoboPatcher-win-x64
+          path: tools/kobo_patcher/bundled
+
+      - name: Verify bundled patcher
+        run: |
+          cd tools/kobo_patcher/bundled
+          sha256sum --check BookFlowKoboPatcher-*-win-x64.exe.sha256
+          test -s BookFlowKoboPatcher-*-win-x64.exe.spdx.json
 
       - name: Log in to the Container registry
         uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4.5.1

@@ -145,6 +145,10 @@ RUN rm -rf \
 # Copy application code *after* dependencies are installed
 COPY . .
 
+# Release jobs supply the tested Windows EXE and checksum/SBOM before building
+# either image. Keep a copy outside /config, since Unraid bind-mounts /config.
+COPY tools/kobo_patcher/bundled/ /opt/bookflow/kobo-patcher/
+
 # Copy built frontend from frontend-builder stage
 COPY --from=frontend-builder /frontend/dist /app/frontend-dist
 
