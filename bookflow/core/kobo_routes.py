@@ -1,7 +1,8 @@
-"""Unregistered Flask Blueprint factory for the isolated Kobo MVP API."""
+"""Token-authenticated Kobo device API and legacy BookFlow endpoints."""
 
 from __future__ import annotations
 
+import secrets
 import time
 from copy import deepcopy
 from ipaddress import ip_address
@@ -10,6 +11,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from flask import Blueprint, Response, jsonify, request, send_file
 
+from bookflow.core import kobo_protocol
 from bookflow.core.kobo_services import (
     KoboAuthenticationError,
     KoboCursorError,
@@ -112,15 +114,47 @@ def register_kobo_routes(
             app.logger.exception("Unable to persist Kobo sync audit event")
 
     @blueprint.get("/<token>/v1/initialization")
+    @blueprint.get("/<token>")
     def initialization(token: str) -> tuple[Response, int] | Response:
+        _user_id, failure = authenticate(token)
+        if failure is not None:
+            return failure
+        response = jsonify({"Resources": kobo_protocol.resources(device_endpoint(token))})
+        response.headers["x-kobo-apitoken"] = "e30="
+        return response
+
+    def device_endpoint(token: str) -> str:
+        return f"{request.url_root.rstrip('/')}/api/kobo/{token}"
+
+    @blueprint.after_request
+    def private_response(response: Response) -> Response:
+        response.headers["Cache-Control"] = "private, no-store"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        return response
+
+    @blueprint.post("/<token>/v1/auth/device")
+    @blueprint.post("/<token>/v1/auth/refresh")
+    @blueprint.post("/<token>/v1/auth/exchange")
+    @blueprint.post("/<token>/v1/user/add-device")
+    def device_auth(token: str) -> tuple[Response, int] | Response:
         user_id, failure = authenticate(token)
         if failure is not None:
             return failure
-        user_id = cast(int, user_id)
-        payload = deepcopy(KOB0_CONTRACT_FIXTURES["initialization"])
-        payload["UserId"] = user_id
-        payload["SyncUrl"] = f"/api/kobo/{token}/v1/library/sync"
-        return jsonify(payload)
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return jsonify({"code": "invalid_request"}), 400
+        # These compatibility values do not grant access. Every subsequent
+        # request must still authenticate the revocable personal URL token.
+        user_key = payload.get("UserKey")
+        return jsonify(
+            {
+                "AccessToken": secrets.token_urlsafe(32),
+                "RefreshToken": secrets.token_urlsafe(32),
+                "TokenType": "Bearer",
+                "TrackingId": kobo_protocol.book_uuid(cast(int, user_id)),
+                "UserKey": user_key if isinstance(user_key, str) else str(user_id),
+            }
+        )
 
     @blueprint.get("/<token>/v1/library/sync")
     def library_sync(token: str) -> tuple[Response, int] | Response:
@@ -130,7 +164,11 @@ def register_kobo_routes(
         user_id = cast(int, user_id)
         started = time.monotonic()
         try:
-            batch = sync_service.sync(user_id=user_id, cursor=request.args.get("cursor"))
+            cursor = request.headers.get("X-Kobo-Synctoken")
+            # Ignore an official-store token left by the previous endpoint.
+            # BookFlow tokens are signed and fail closed if modified.
+            cursor = cursor.removeprefix("bf1.") if cursor and cursor.startswith("bf1.") else None
+            batch = sync_service.sync(user_id=user_id, cursor=cursor, persistent=True)
         except KoboCursorError:
             record_sync_audit(
                 user_id=user_id,
@@ -147,26 +185,163 @@ def register_kobo_routes(
                 error_code="forbidden",
             )
             return jsonify({"code": "forbidden", "message": "Kobo is unavailable"}), 403
-        payload = deepcopy(KOB0_CONTRACT_FIXTURES["sync"])
-        payload.update(
-            {
-                "Changes": batch.changes,
-                "Cursor": batch.cursor,
-                "HighWater": batch.high_water,
-            }
-        )
+        payload = []
+        latest = {change["book_id"]: change for change in batch.changes}
+        for book_id, change in latest.items():
+            try:
+                book = sync_service.get_book_metadata(user_id=user_id, book_id=book_id)
+            except KoboEntitlementError:
+                # Only IDs from this user's own journal can produce tombstones.
+                payload.append(
+                    {
+                        "ChangedEntitlement": {
+                            "BookEntitlement": kobo_protocol.entitlement(
+                                book_id, change["created_at"], removed=True
+                            )
+                        }
+                    }
+                )
+                continue
+            if str(book["file_format"]).lower() not in {"epub", "kepub"}:
+                continue
+            state = kobo_protocol.reading_state(
+                book_id, sync_service.get_reading_state(user_id=user_id, book_id=book_id)
+            )
+            if change["type"] == "progress" and book["first_revision"] <= batch.since_revision:
+                payload.append({"ChangedReadingState": {"ReadingState": state}})
+            else:
+                kind = (
+                    "NewEntitlement"
+                    if book["first_revision"] > batch.since_revision
+                    else "ChangedEntitlement"
+                )
+                payload.append(
+                    {
+                        kind: {
+                            "BookEntitlement": kobo_protocol.entitlement(
+                                book_id, book["updated_at"]
+                            ),
+                            "BookMetadata": kobo_protocol.metadata(book, device_endpoint(token)),
+                            "ReadingState": state,
+                        }
+                    }
+                )
         response = jsonify(payload)
+        response.headers["X-Kobo-Synctoken"] = f"bf1.{batch.cursor}"
+        response.headers["X-Kobo-Sync-Mode"] = "delta"
         if batch.has_more:
             response.headers["X-Kobo-Sync"] = "continue"
         record_sync_audit(
             user_id=user_id,
             status="completed",
             started=started,
-            changes_sent=len(batch.changes),
+            changes_sent=len(payload),
             high_water_revision=batch.high_water,
             has_more=batch.has_more,
         )
         return response
+
+    @blueprint.get("/<token>/v1/library/<book_identifier>/metadata")
+    def device_metadata(token: str, book_identifier: str) -> tuple[Response, int] | Response:
+        user_id, failure = authenticate(token)
+        if failure is not None:
+            return failure
+        try:
+            book_id = kobo_protocol.parse_book_uuid(book_identifier)
+            book = sync_service.get_book_metadata(user_id=cast(int, user_id), book_id=book_id)
+        except ValueError, KoboEntitlementError:
+            return jsonify({"code": "not_found"}), 404
+        return jsonify([kobo_protocol.metadata(book, device_endpoint(token))])
+
+    @blueprint.route("/<token>/v1/library/<book_identifier>/state", methods=["GET", "PUT"])
+    def device_reading_state(token: str, book_identifier: str) -> tuple[Response, int] | Response:
+        user_id, failure = authenticate(token)
+        if failure is not None:
+            return failure
+        user_id = cast(int, user_id)
+        try:
+            book_id = kobo_protocol.parse_book_uuid(book_identifier)
+            stored = sync_service.get_reading_state(user_id=user_id, book_id=book_id)
+        except ValueError, KoboEntitlementError:
+            return jsonify({"code": "not_found"}), 404
+        if request.method == "GET":
+            return jsonify([kobo_protocol.reading_state(book_id, stored)])
+        payload = request.get_json(silent=True)
+        try:
+            state, progress = kobo_protocol.parse_reading_state(payload, book_identifier, stored)
+            # A stale bookmark must not make the whole device sync fail or
+            # overwrite newer progress. Explicit resets remain a web action.
+            if stored is None or progress >= stored["progress"]:
+                stored = sync_service.set_reading_state(
+                    user_id=user_id, book_id=book_id, progress=progress, device_state=state
+                )
+        except KeyError, TypeError, ValueError, AttributeError:
+            return jsonify({"code": "invalid_reading_state"}), 400
+        except KoboEntitlementError:
+            return jsonify({"code": "not_found"}), 404
+        date = kobo_protocol.timestamp(stored["updated_at"] if stored else None)
+        return jsonify(
+            {
+                "RequestResult": "Success",
+                "UpdateResults": [
+                    {
+                        "EntitlementId": book_identifier,
+                        "LastModified": date,
+                        "PriorityTimestamp": date,
+                        "CurrentBookmarkResult": {"Result": "Success"},
+                        "StatusInfoResult": {"Result": "Success"},
+                        "StatisticsResult": {"Result": "Success"},
+                    }
+                ],
+            }
+        )
+
+    @blueprint.delete("/<token>/v1/library/<book_identifier>")
+    def device_delete(token: str, book_identifier: str) -> tuple[Response, int] | Response:
+        user_id, failure = authenticate(token)
+        if failure is not None:
+            return failure
+        try:
+            book_id = kobo_protocol.parse_book_uuid(book_identifier)
+            sync_service.get_book_metadata(user_id=cast(int, user_id), book_id=book_id)
+            sync_service.delete_book(user_id=cast(int, user_id), book_id=book_id, source="kobo")
+        except ValueError, KoboEntitlementError:
+            return jsonify({"code": "not_found"}), 404
+        return jsonify({})
+
+    @blueprint.get("/<token>/v1/covers/<book_identifier>/<int:width>/<int:height>/image.jpg")
+    @blueprint.get(
+        "/<token>/v1/covers/<book_identifier>/<int:width>/<int:height>/<quality>/<grayscale>/image.jpg"
+    )
+    def device_cover(
+        token: str,
+        book_identifier: str,
+        width: int,
+        height: int,
+        quality: str = "",
+        grayscale: str = "",
+    ) -> tuple[Response, int] | Response:
+        del width, height, quality, grayscale
+        try:
+            book_id = kobo_protocol.parse_book_uuid(book_identifier)
+        except ValueError:
+            return jsonify({"code": "not_found"}), 404
+        return book_cover(token, book_id)
+
+    @blueprint.route("/<token>/v1/analytics/gettests", methods=["GET", "POST"])
+    @blueprint.post("/<token>/v1/analytics/event")
+    @blueprint.get("/<token>/v1/configuration")
+    @blueprint.get("/<token>/v1/user/profile")
+    @blueprint.get("/<token>/v1/user/platform")
+    @blueprint.get("/<token>/v1/user/loyalty/benefits")
+    def device_optional_resource(token: str) -> tuple[Response, int] | Response:
+        _user_id, failure = authenticate(token)
+        return failure if failure is not None else jsonify({})
+
+    @blueprint.get("/<token>/v1/library/tags")
+    def device_tags(token: str) -> tuple[Response, int] | Response:
+        _user_id, failure = authenticate(token)
+        return failure if failure is not None else jsonify([])
 
     @blueprint.get("/<token>/v1/books/<int:book_id>")
     def book_metadata(token: str, book_id: int) -> tuple[Response, int] | Response:
