@@ -49,7 +49,10 @@ HARDCOVER_PAGE_SIZE = 25  # Hardcover API returns max 25 results per page
 HARDCOVER_MIN_AUTHOR_PARTS = 2
 HARDCOVER_MIN_TYPEAHEAD_QUERY_LENGTH = 2
 HARDCOVER_MAX_SERIES_OPTIONS = 7
-HARDCOVER_API_KEY_MIN_LENGTH = 100
+# Sanity floor for the Test Connection button only; the API call is the real check.
+# Legacy Hardcover keys were long JWTs (100+ chars), but the scoped personal
+# access tokens Hardcover issues since August 2026 are around 50 chars.
+HARDCOVER_API_KEY_MIN_LENGTH = 32
 HARDCOVER_LIST_URL_PATTERN = re.compile(
     r"^/(?:@([\w.-]+)/)?lists?/([\w-]+)/?$",
     re.IGNORECASE,
