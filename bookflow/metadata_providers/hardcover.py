@@ -49,7 +49,6 @@ HARDCOVER_PAGE_SIZE = 25  # Hardcover API returns max 25 results per page
 HARDCOVER_MIN_AUTHOR_PARTS = 2
 HARDCOVER_MIN_TYPEAHEAD_QUERY_LENGTH = 2
 HARDCOVER_MAX_SERIES_OPTIONS = 7
-HARDCOVER_API_KEY_MIN_LENGTH = 100
 HARDCOVER_LIST_URL_PATTERN = re.compile(
     r"^/(?:@([\w.-]+)/)?lists?/([\w-]+)/?$",
     re.IGNORECASE,
@@ -2997,15 +2996,6 @@ def _test_hardcover_connection(current_values: dict[str, Any] | None = None) -> 
         # Clear any stored connection metadata since there's no key
         _save_connected_user(None, None)
         return {"success": False, "message": "API key is required"}
-
-    if key_len < HARDCOVER_API_KEY_MIN_LENGTH:
-        return {
-            "success": False,
-            "message": (
-                f"API key seems too short ({key_len} chars). "
-                f"Expected {HARDCOVER_API_KEY_MIN_LENGTH}+ chars."
-            ),
-        }
 
     connection_result = {"success": False, "message": "API request failed - check your API key"}
     try:
