@@ -14,7 +14,8 @@ application. You choose the metadata providers, release sources, download
 clients, and library destinations; BookFlow coordinates the workflow between
 them.
 
-Version 1.0.0 is the first standalone BookFlow release.
+See [Releases](https://github.com/Timminater/BookFlow/releases) for the latest
+version and upgrade notes.
 
 ## Highlights
 
@@ -43,8 +44,10 @@ Version 1.0.0 is the first standalone BookFlow release.
   patcher with a short-lived pairing flow.
 - **Multi-user authentication** — Local accounts, OIDC, trusted reverse-proxy
   authentication, and optional Calibre-Web user database synchronization.
-- **PWA and notifications** — Installable web app, offline application shell,
-  update prompts, and per-user web-push rules.
+- **Browser reading and offline access** — Read supported ebooks in the browser,
+  save books for offline reading, and sync reading progress when back online.
+- **PWA and notifications** — Installable web app, update prompts, and per-user
+  web-push rules.
 - **Operations built in** — Versioned database migrations, integrity checks,
   encrypted backups, staged restore, health/readiness endpoints, metrics,
   structured redacted logging, and administrative audit views.
@@ -54,13 +57,12 @@ Version 1.0.0 is the first standalone BookFlow release.
 
 ## Screenshots
 
-| Home | Search results |
-| --- | --- |
-| ![BookFlow home](README_images/homescreen.png) | ![BookFlow search results](README_images/search-results.png) |
+These screenshots show a demo library; book covers and content depend on your
+configured providers and library.
 
-| Multiple sources | Download activity |
+| Home | Personal library |
 | --- | --- |
-| ![BookFlow multi-source view](README_images/multi-source.png) | ![BookFlow downloads](README_images/downloads.png) |
+| ![BookFlow home](README_images/home.png) | ![BookFlow personal library](README_images/library.png) |
 
 ## Docker images
 
@@ -72,9 +74,9 @@ Release tags publish attested multi-architecture images for `linux/amd64` and
 | `ghcr.io/timminater/bookflow` | Full image with built-in Chromium browser automation |
 | `ghcr.io/timminater/bookflow-lite` | Smaller image for external bypassers or sources that do not need browser automation |
 
-Published version tags include `latest`, `1.0.0`, `1.0`, `v1.0.0`, and a
-commit-SHA tag. Production deployments should use a version tag or, preferably,
-the immutable digest shown by GHCR.
+Published tags include `latest`, version tags such as `1.3.1` and `v1.3.1`,
+and a commit-SHA tag. For controlled upgrades, use the immutable digest shown
+by GHCR and record the corresponding release version.
 
 ## Quick start with Docker Compose
 
@@ -87,8 +89,13 @@ curl -O https://raw.githubusercontent.com/Timminater/BookFlow/main/compose/docke
 Create `.env` beside it:
 
 ```dotenv
-BOOKFLOW_IMAGE=ghcr.io/timminater/bookflow:1.0.0
+BOOKFLOW_IMAGE=ghcr.io/timminater/bookflow:latest
 ```
+
+Edit `docker-compose.yml`: replace `/path/to/config` and `/path/to/books` with
+real host directories writable by the configured `PUID` and `PGID`. Adjust
+the port and timezone as needed. Mount completed download paths if using an
+external download client.
 
 Start BookFlow:
 
@@ -97,7 +104,11 @@ docker compose config
 docker compose up -d
 ```
 
-Open `http://localhost:8084` and create the first administrator account.
+Open `http://localhost:8084`. The default authentication mode is `none`, which
+grants administrative access without a login. For a multi-user or exposed
+installation, create the first administrator under **Users**, then enable an
+authentication method in **Admin settings** before granting access to others.
+See [Authentication and access](#authentication-and-access).
 
 For an immutable production pin, replace the version tag with the digest
 published by GHCR:
@@ -121,15 +132,8 @@ Create a Docker container with these core settings:
 | `TZ` | Your IANA timezone, for example `Europe/Amsterdam` |
 
 The `latest` tag makes Unraid update checks convenient. For controlled
-production upgrades, use `ghcr.io/timminater/bookflow:1.0.0` or an immutable
-digest and change it deliberately after taking a backup.
-
-The repository and initial GHCR package may be private. In that case, sign in
-on the Unraid host with a GitHub token that has `read:packages`:
-
-```bash
-echo "$GHCR_TOKEN" | docker login ghcr.io -u Timminater --password-stdin
-```
+production upgrades, pin the release's immutable digest and change it
+deliberately after taking a backup.
 
 Useful optional mappings:
 
@@ -303,7 +307,7 @@ Local development commands and demo data are documented in
 
 ## Releases
 
-Pushing a semantic version tag such as `v1.0.0` runs the Docker publication
+Pushing a semantic version tag such as `v1.3.1` runs the Docker publication
 workflow. It:
 
 - builds the full and lite targets;
